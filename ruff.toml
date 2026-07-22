@@ -1,0 +1,27 @@
+line-length = 120
+target-version = "py312"
+
+exclude = [
+    ".venv",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports/vars, undefined names)
+    "I",   # import sorting
+    "UP",  # pyupgrade (modern syntax)
+    "B",   # bugbear (common bug patterns)
+]
+ignore = [
+    "E501",  # line length — enforced via line-length above, not as a hard error
+]
+
+[lint.per-file-ignores]
+# paper_trader.py deliberately inserts the project root onto sys.path before
+# importing root-level sibling modules — see its top-of-file comment.
+"paper_trading/paper_trader.py" = ["E402"]
+# web_dashboard.py does the same for its sibling dashboard.py import.
+"paper_trading/web_dashboard.py" = ["E402"]
+# live_trader.py does the same for the root-level modules it imports.
+"live_trading/live_trader.py" = ["E402"]

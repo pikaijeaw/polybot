@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oracle-Lag Scalper — Paper Trading Monitor</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #12161f;
+    --panel-border: #232838;
+    --text: #e6e9f0;
+    --text-dim: #7a8296;
+    --cyan: #4fd6e8;
+    --amber: #e8b84f;
+    --magenta: #d97fe0;
+    --green: #4fe89b;
+    --red: #e85f6b;
+    --mono: "SFMono-Regular", Consolas, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    padding: 20px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  h1 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.2px;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: background 0.3s;
+  }
+  .dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.stale { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 16px;
+  }
+  .grid > .full { grid-column: 1 / -1; }
+  @media (max-width: 860px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .panel h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-weight: 700;
+    margin: 0 0 12px 0;
+    color: var(--text-dim);
+  }
+  .panel.price h2 { color: var(--cyan); }
+  .panel.orders h2 { color: var(--amber); }
+  .panel.wallet h2 { color: var(--magenta); }
+
+  .big-price {
+    font-family: var(--mono);
+    font-size: 34px;
+    font-weight: 600;
+    color: var(--cyan);
+    line-height: 1;
+    margin-bottom: 10px;
+  }
+  .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
+  .row .label { color: var(--text-dim); }
+  .row .value { font-family: var(--mono); }
+
+  .edge-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: #171c28; }
+  .edge-row .side { font-weight: 600; font-size: 13px; }
+  .edge-row .metrics { font-family: var(--mono); font-size: 13px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--text-dim); }
+
+  .dim { color: var(--text-dim); }
+  .empty { color: var(--text-dim); font-size: 13px; padding: 8px 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; white-space: nowrap; }
+  th { color: var(--text-dim); font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.6px; border-bottom: 1px solid var(--panel-border); }
+  td { font-family: var(--mono); border-bottom: 1px solid #1a1f2b; }
+  tr:last-child td { border-bottom: none; }
+  .badge { padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; }
+  .badge.OPEN { background: #3a3416; color: var(--amber); }
+  .badge.WON  { background: #163a2a; color: var(--green); }
+  .badge.LOST { background: #3a1a1e; color: var(--red); }
+
+  .table-wrap { overflow-x: auto; }
+
+  .stat-strip { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
+  .stat { font-size: 12px; }
+  .stat .label { color: var(--text-dim); display: block; }
+  .stat .value { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+
+  footer { margin-top: 18px; font-size: 11px; color: var(--text-dim); text-align: center; }
+
+  .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .panel-header h2 { margin: 0; }
+  .btn {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bg);
+    background: var(--amber);
+    border: none;
+    border-radius: 6px;
+    padding: 7px 13px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:active { opacity: 0.7; }
+  .btn.disabled { opacity: 0.4; pointer-events: none; }
+  .btn.danger { background: var(--red); }
+  .btn.stop { background: var(--panel-border); color: var(--text); }
+
+  .bot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 4px; }
+  @media (max-width: 860px) { .bot-grid { grid-template-columns: 1fr; } }
+  .bot-panel { background: #171c28; border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px; }
+  .bot-panel.live-panel { border-color: #4a2530; }
+  .bot-panel h3 { margin: 0 0 10px 0; font-size: 13px; letter-spacing: 0.4px; }
+  .bot-panel.paper-panel h3 { color: var(--amber); }
+  .bot-panel.live-panel h3 { color: var(--red); }
+  .bot-status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; }
+  .bot-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+  .bot-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .bot-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-bottom: 10px; }
+  .bot-fields label { display: flex; flex-direction: column; font-size: 10.5px; color: var(--text-dim); gap: 3px; }
+  .bot-fields input {
+    background: var(--bg); border: 1px solid var(--panel-border); color: var(--text);
+    border-radius: 5px; padding: 5px 6px; font-family: var(--mono); font-size: 12px; width: 100%;
+  }
+  .bot-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .preflight-badge { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.3px; }
+  .preflight-badge.ready { background: #163a2a; color: var(--green); }
+  .preflight-badge.not-ready { background: #3a1a1e; color: var(--red); }
+  .preflight-badge.checking { background: #232838; color: var(--text-dim); }
+  .preflight-fails { margin-top: 8px; font-size: 11px; color: var(--red); max-height: 90px; overflow-y: auto; }
+  .confirm-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+  .confirm-row input { flex: 1; }
+  .bot-msg { font-size: 11.5px; margin-top: 8px; color: var(--text-dim); }
+  .bot-msg.err { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Oracle-Lag Scalper — Paper Trading Monitor</h1>
+  <div class="status">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">connecting…</span>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="panel price">
+    <h2>Price</h2>
+    <div id="price-content"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel wallet">
+    <h2>Wallet</h2>
+    <div id="wallet-content"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel orders full">
+    <div class="panel-header">
+      <h2>Orders</h2>
+      <a id="report-btn" class="btn" href="/api/report.csv" download title="Download full order list, win/loss, entry price and P&amp;L as CSV">Generate Report (CSV)</a>
+    </div>
+    <div id="orders-content"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Bot Control</h2>
+    <div class="bot-grid">
+
+      <div class="bot-panel paper-panel">
+        <h3>PAPER TRADING</h3>
+        <div class="bot-status-line">
+          <span class="bot-dot" id="paper-dot"></span>
+          <span id="paper-status-text">checking…</span>
+        </div>
+        <div class="bot-fields">
+          <label>Bankroll ($)<input type="number" id="paper-bankroll" value="50" step="1"></label>
+          <label>Min edge<input type="number" id="paper-min-edge" value="0.02" step="0.01"></label>
+          <label>Max position %<input type="number" id="paper-max-pos" value="0.05" step="0.01"></label>
+          <label>Kelly multiplier<input type="number" id="paper-kelly" value="0.25" step="0.05"></label>
+          <label>Max open positions (optional)<input type="number" id="paper-max-open" placeholder="unlimited" step="1"></label>
+        </div>
+        <div class="bot-actions">
+          <button class="btn" id="paper-start-btn" onclick="startBot('paper')">Start</button>
+          <button class="btn stop" id="paper-stop-btn" onclick="stopBot('paper')">Stop</button>
+        </div>
+        <div class="bot-msg" id="paper-msg"></div>
+      </div>
+
+      <div class="bot-panel live-panel">
+        <h3>LIVE TRADING (real funds)</h3>
+        <div class="bot-status-line">
+          <span class="bot-dot" id="live-dot"></span>
+          <span id="live-status-text">checking…</span>
+          <span class="preflight-badge checking" id="preflight-badge">preflight: click Start to check</span>
+        </div>
+        <div class="bot-fields">
+          <label>Bankroll ($, sizing ref)<input type="number" id="live-bankroll" value="50" step="1"></label>
+          <label>Min edge<input type="number" id="live-min-edge" value="0.02" step="0.01"></label>
+          <label>Max position %<input type="number" id="live-max-pos" value="0.05" step="0.01"></label>
+          <label>Kelly multiplier<input type="number" id="live-kelly" value="0.25" step="0.05"></label>
+          <label>Max stake/trade ($)<input type="number" id="live-max-stake" value="2" step="0.5"></label>
+          <label>Max trades/hour<input type="number" id="live-max-hour" value="4" step="1"></label>
+          <label>Max trades/day<input type="number" id="live-max-day" value="20" step="1"></label>
+          <label>Max open positions<input type="number" id="live-max-open" value="1" step="1"></label>
+          <label>Max daily loss ($, optional)<input type="number" id="live-max-daily-loss" placeholder="disabled" step="1"></label>
+        </div>
+        <div class="bot-actions">
+          <button class="btn danger" id="live-start-btn" onclick="onClickStartLive()">Start Live</button>
+          <button class="btn stop" id="live-stop-btn" onclick="stopBot('live')">Stop</button>
+        </div>
+        <div class="confirm-row" id="live-confirm-row" style="display:none;">
+          <input type="text" id="live-confirm-input" placeholder="Type START LIVE to confirm">
+          <button class="btn danger" onclick="confirmStartLive()">Confirm</button>
+          <button class="btn stop" onclick="cancelLiveConfirm()">Cancel</button>
+        </div>
+        <div class="preflight-fails" id="preflight-fails"></div>
+        <div class="bot-msg" id="live-msg"></div>
+      </div>
+
+    </div>
+    <div class="dim" style="font-size:11px;margin-top:10px;">
+      Live mode places real orders automatically once started (no per-trade confirmation) — it is gated by the caps above and refuses to start unless preflight_check.py reports READY.
+    </div>
+  </div>
+</div>
+
+<footer>Read-only monitor · polls /api/data every 1.5s · no orders are placed from this page</footer>
+
+<script>
+const REFRESH_MS = 1500;
+
+function fmtMoney(x, signed) {
+  if (x === null || x === undefined) return "-";
+  const sign = signed && x > 0 ? "+" : "";
+  return sign + "$" + x.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtPct(x, signed) {
+  if (x === null || x === undefined) return "-";
+  signed = signed !== false;
+  const sign = signed && x > 0 ? "+" : "";
+  return sign + (x * 100).toFixed(1) + "%";
+}
+function fmtNum(x, d) {
+  if (x === null || x === undefined) return "-";
+  return x.toFixed(d === undefined ? 2 : d);
+}
+function ageStr(ts) {
+  if (!ts) return "-";
+  const dt = Date.now() / 1000 - ts;
+  if (dt < 0) return "just now";
+  if (dt < 60) return Math.round(dt) + "s ago";
+  return (dt / 60).toFixed(1) + "m ago";
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function renderPrice(data) {
+  const price = data.price;
+  const engine = data.state && data.state.engine;
+  let html = "";
+
+  if (price.value !== null) {
+    html += `<div class="big-price">$${price.value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>`;
+    html += `<div class="dim" style="font-size:11px;margin-bottom:12px;">BTC/USDT · Binance</div>`;
+  } else {
+    html += `<div class="empty">price unavailable (${esc(price.error || "unknown error")})</div>`;
+  }
+
+  if (!engine) {
+    html += `<div class="empty">No active Polymarket window tracked yet.</div>`;
+  } else {
+    const approx = engine.anchor_is_approximate ? "~" : "";
+    html += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug || "-")}</span></div>`;
+    html += `<div class="row"><span class="label">Anchor</span><span class="value">${approx}${fmtNum(engine.anchor_price)}</span></div>`;
+    html += `<div class="row"><span class="label">Closes in</span><span class="value">${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
+    if (engine.p_up !== null && engine.p_up !== undefined) {
+      html += `<div class="row"><span class="label">Model P(Up)</span><span class="value">${fmtPct(engine.p_up, false)}</span></div>`;
+      html += `<div class="row"><span class="label">sigma/&radic;s</span><span class="value">${(engine.sigma_per_sqrt_sec || 0).toExponential(2)}</span></div>`;
+    }
+    if (engine.up_edge !== null && engine.up_edge !== undefined) {
+      const upCls = engine.up_edge > 0 ? "pos" : "neg";
+      const downCls = (engine.down_edge || 0) > 0 ? "pos" : "neg";
+      html += `<div class="edge-row"><span class="side">Up</span><span class="metrics ${upCls}">ask ${fmtNum(engine.up_ask, 3)} · edge ${fmtPct(engine.up_edge)}</span></div>`;
+      html += `<div class="edge-row"><span class="side">Down</span><span class="metrics ${downCls}">ask ${fmtNum(engine.down_ask, 3)} · edge ${fmtPct(engine.down_edge)}</span></div>`;
+    }
+  }
+  document.getElementById("price-content").innerHTML = html;
+}
+
+function renderWallet(data) {
+  const state = data.state;
+  const wallet = data.wallet;
+  let html = `<div style="font-size:12px;font-weight:700;color:var(--text-dim);margin-bottom:6px;">PAPER WALLET</div>`;
+
+  if (state) {
+    const ret = state.starting_bankroll ? (state.equity - state.starting_bankroll) / state.starting_bankroll : null;
+    const retCls = (ret || 0) >= 0 ? "pos" : "neg";
+    const stats = state.stats || {};
+    const pnlCls = (stats.realized_pnl || 0) >= 0 ? "pos" : "neg";
+    html += `<div class="row"><span class="label">Cash</span><span class="value">${fmtMoney(state.cash)}</span></div>`;
+    html += `<div class="row"><span class="label">Equity</span><span class="value">${fmtMoney(state.equity)} <span class="${retCls}">(${fmtPct(ret)})</span></span></div>`;
+    html += `<div class="stat-strip">`;
+    html += `<div class="stat"><span class="label">Trades</span><span class="value">${stats.trades || 0}</span></div>`;
+    html += `<div class="stat"><span class="label">Win rate</span><span class="value">${fmtPct(stats.win_rate, false)}</span></div>`;
+    html += `<div class="stat"><span class="label">Realized P&amp;L</span><span class="value ${pnlCls}">${fmtMoney(stats.realized_pnl, true)}</span></div>`;
+    html += `</div>`;
+    html += `<div class="dim" style="font-size:11px;margin-top:8px;">updated ${ageStr(state.updated_at)}</div>`;
+  } else {
+    html += `<div class="empty">no data yet — is paper_trader.py running?</div>`;
+  }
+
+  html += `<div style="font-size:12px;font-weight:700;color:var(--text-dim);margin:14px 0 6px 0;">REAL WALLET (read-only)</div>`;
+  if (!wallet.configured) {
+    html += `<div class="empty">not configured (set POLYMARKET_PRIVATE_KEY in .env)</div>`;
+  } else {
+    html += `<div class="dim" style="font-size:11.5px;word-break:break-all;margin-bottom:6px;">${esc(wallet.address)}</div>`;
+    if (wallet.error) {
+      html += `<div class="neg" style="font-size:12px;">error: ${esc(wallet.error)}</div>`;
+    } else {
+      html += `<div class="row"><span class="label">POL</span><span class="value">${fmtNum(wallet.pol, 4)}</span></div>`;
+      html += `<div class="row"><span class="label">USDC</span><span class="value">${fmtNum(wallet.usdc, 4)}</span></div>`;
+    }
+  }
+  document.getElementById("wallet-content").innerHTML = html;
+}
+
+function renderOrders(data) {
+  const state = data.state;
+  if (!state) {
+    document.getElementById("orders-content").innerHTML = `<div class="empty">No paper_trader.py data yet — is it running?</div>`;
+    return;
+  }
+  const open = state.open_positions || [];
+  const closed = (state.recent_closed || []).slice().reverse();
+
+  if (open.length === 0 && closed.length === 0) {
+    document.getElementById("orders-content").innerHTML = `<div class="empty">No trades yet.</div>`;
+    return;
+  }
+
+  let rows = "";
+  const now = Date.now() / 1000;
+  for (const p of open) {
+    const remaining = p.end_epoch - now;
+    rows += `<tr>
+      <td><span class="badge OPEN">OPEN</span></td>
+      <td>${esc(p.market_slug)}</td>
+      <td>${esc(p.side)}</td>
+      <td>${fmtNum(p.entry_price, 3)}</td>
+      <td>${fmtMoney(p.stake_usd)}</td>
+      <td>${fmtPct(p.edge_at_entry)}</td>
+      <td>T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s</td>
+    </tr>`;
+  }
+  for (const p of closed.slice(0, 12)) {
+    rows += `<tr>
+      <td><span class="badge ${p.status}">${esc(p.status)}</span></td>
+      <td>${esc(p.market_slug)}</td>
+      <td>${esc(p.side)}</td>
+      <td>${fmtNum(p.entry_price, 3)}</td>
+      <td>${fmtMoney(p.stake_usd)}</td>
+      <td>${fmtPct(p.edge_at_entry)}</td>
+      <td class="${(p.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}">${fmtMoney(p.pnl_usd, true)}</td>
+    </tr>`;
+  }
+
+  document.getElementById("orders-content").innerHTML = `
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Status</th><th>Window</th><th>Side</th><th>Entry</th><th>Stake</th><th>Edge</th><th>P&amp;L / T-remaining</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>`;
+}
+
+async function poll() {
+  const dot = document.getElementById("status-dot");
+  const text = document.getElementById("status-text");
+  try {
+    const resp = await fetch("/api/data", {cache: "no-store"});
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    renderPrice(data);
+    renderWallet(data);
+    renderOrders(data);
+    document.getElementById("report-btn").classList.toggle("disabled", !data.state);
+    dot.className = "dot live";
+    text.textContent = "live · " + new Date(data.server_time * 1000).toLocaleTimeString();
+  } catch (e) {
+    dot.className = "dot stale";
+    text.textContent = "disconnected (" + e.message + ")";
+  }
+}
+
+// -- bot control -------------------------------------------------------
+
+let preflightReady = false;
+
+function setBotMsg(mode, msg, isErr) {
+  const el = document.getElementById(mode + "-msg");
+  el.textContent = msg || "";
+  el.classList.toggle("err", !!isErr);
+}
+
+async function pollBotStatus() {
+  try {
+    const resp = await fetch("/api/bot/status", {cache: "no-store"});
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    for (const mode of ["paper", "live"]) {
+      const s = data[mode];
+      const dot = document.getElementById(mode + "-dot");
+      const text = document.getElementById(mode + "-status-text");
+      dot.className = "bot-dot" + (s.running ? " on" : "");
+      text.textContent = s.running ? `running (pid ${s.pid})` : "stopped";
+      document.getElementById(mode + "-start-btn").classList.toggle("disabled", s.running);
+      document.getElementById(mode + "-stop-btn").classList.toggle("disabled", !s.running);
+    }
+  } catch (e) {
+    // leave last-known status displayed rather than flashing "checking..." on a transient error
+  }
+}
+
+async function checkPreflight() {
+  // Checked on demand (when Start Live is clicked), not on a timer — a full
+  // preflight re-derives CLOB API creds, so polling it continuously would
+  // hammer that auth flow for no reason.
+  const badge = document.getElementById("preflight-badge");
+  const failsEl = document.getElementById("preflight-fails");
+  badge.textContent = "preflight: checking…";
+  badge.className = "preflight-badge checking";
+  try {
+    const resp = await fetch("/api/preflight?force=1", {cache: "no-store"});
+    const data = await resp.json();
+    preflightReady = !!data.ready;
+    badge.textContent = preflightReady ? "preflight: READY" : "preflight: NOT READY";
+    badge.className = "preflight-badge " + (preflightReady ? "ready" : "not-ready");
+    const fails = (data.results || []).filter(r => r.status === "FAIL");
+    failsEl.innerHTML = fails.length
+      ? fails.map(r => esc(`[FAIL] ${r.section} ${r.name}: ${r.detail}`)).join("<br>")
+      : "";
+  } catch (e) {
+    preflightReady = false;
+    badge.textContent = "preflight: error";
+    badge.className = "preflight-badge not-ready";
+  }
+}
+
+async function onClickStartLive() {
+  await checkPreflight();
+  if (preflightReady) {
+    showLiveConfirm();
+  } else {
+    setBotMsg("live", "preflight not ready — see failing checks above", true);
+  }
+}
+
+function paramsFor(mode) {
+  if (mode === "paper") {
+    const maxOpen = document.getElementById("paper-max-open").value;
+    return {
+      bankroll: document.getElementById("paper-bankroll").value,
+      min_edge: document.getElementById("paper-min-edge").value,
+      max_position_pct: document.getElementById("paper-max-pos").value,
+      kelly_multiplier: document.getElementById("paper-kelly").value,
+      max_open_positions: maxOpen === "" ? null : maxOpen,
+    };
+  }
+  const maxDailyLoss = document.getElementById("live-max-daily-loss").value;
+  return {
+    bankroll: document.getElementById("live-bankroll").value,
+    min_edge: document.getElementById("live-min-edge").value,
+    max_position_pct: document.getElementById("live-max-pos").value,
+    kelly_multiplier: document.getElementById("live-kelly").value,
+    max_stake_usd: document.getElementById("live-max-stake").value,
+    max_trades_per_hour: document.getElementById("live-max-hour").value,
+    max_trades_per_day: document.getElementById("live-max-day").value,
+    max_open_positions: document.getElementById("live-max-open").value,
+    max_daily_loss_usd: maxDailyLoss === "" ? null : maxDailyLoss,
+  };
+}
+
+async function startBot(mode) {
+  setBotMsg(mode, "starting…");
+  try {
+    const resp = await fetch("/api/bot/start", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode, ...paramsFor(mode)}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setBotMsg(mode, data.error || ("HTTP " + resp.status), true);
+    } else {
+      setBotMsg(mode, `started (pid ${data.pid})`);
+    }
+  } catch (e) {
+    setBotMsg(mode, e.message, true);
+  }
+  pollBotStatus();
+}
+
+async function stopBot(mode) {
+  setBotMsg(mode, "stopping…");
+  try {
+    const resp = await fetch("/api/bot/stop", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setBotMsg(mode, data.error || ("HTTP " + resp.status), true);
+    } else {
+      setBotMsg(mode, data.ok ? "stopped" : "still shutting down…");
+    }
+  } catch (e) {
+    setBotMsg(mode, e.message, true);
+  }
+  pollBotStatus();
+}
+
+function showLiveConfirm() {
+  if (!preflightReady) return;
+  document.getElementById("live-confirm-row").style.display = "flex";
+  document.getElementById("live-confirm-input").value = "";
+  document.getElementById("live-confirm-input").focus();
+}
+
+function cancelLiveConfirm() {
+  document.getElementById("live-confirm-row").style.display = "none";
+}
+
+function confirmStartLive() {
+  const val = document.getElementById("live-confirm-input").value.trim();
+  if (val !== "START LIVE") {
+    setBotMsg("live", 'type exactly "START LIVE" to confirm', true);
+    return;
+  }
+  cancelLiveConfirm();
+  startBot("live");
+}
+
+poll();
+pollBotStatus();
+setInterval(poll, REFRESH_MS);
+setInterval(pollBotStatus, 3000);
+</script>
+</body>
+</html>

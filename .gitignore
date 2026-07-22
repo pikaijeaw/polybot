@@ -1,0 +1,39 @@
+# secrets
+.env
+!.env.example
+
+# createwallet/*.txt is where create_polygon_wallet.py's --save-plaintext
+# option writes raw private keys/mnemonics — never commit these
+createwallet/*.txt
+createwallet/*keystore*.json
+
+*.pem
+*.key
+
+# paper_trading/ runtime state — generated locally, not source
+paper_trading/paper_state.json
+paper_trading/paper_state.tmp
+paper_trading/paper_trades.jsonl
+paper_trading/paper_trader.pid
+paper_trading/paper_trader.autorestart.json
+paper_trading/perf_logs/
+
+# live_trading/ runtime state — generated locally, not source
+live_trading/live_state.json
+live_trading/live_state.tmp
+live_trading/live_trades.jsonl
+live_trading/live_trader.pid
+live_trading/live_trader.autorestart.json
+live_trading/perf_logs/
+
+# watchdog.py runtime state (root) — generated locally, not source
+watchdog.pid
+
+# logs, anywhere in the repo — generated locally, not source
+*.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/

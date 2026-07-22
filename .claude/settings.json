@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('tool_input', {}).get('file_path', ''))\" | { read -r f; case \"$f\" in *.py) .venv/bin/ruff format \"$f\" 2>/dev/null; .venv/bin/ruff check --fix \"$f\" 2>/dev/null;; esac; } 2>/dev/null || true",
+            "statusMessage": "ruff format + fix"
+          }
+        ]
+      }
+    ]
+  }
+}

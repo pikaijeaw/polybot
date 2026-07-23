@@ -225,6 +225,12 @@
         <div class="bot-actions">
           <button class="btn" id="paper-start-btn" onclick="startBot('paper')">Start</button>
           <button class="btn stop" id="paper-stop-btn" onclick="stopBot('paper')">Stop</button>
+          <button class="btn danger" id="paper-reset-btn" onclick="showPaperResetConfirm()">Reset Everything</button>
+        </div>
+        <div class="confirm-row" id="paper-reset-confirm-row" style="display:none;">
+          <input type="text" id="paper-reset-confirm-input" placeholder="Type RESET to confirm">
+          <button class="btn danger" onclick="confirmPaperReset()">Confirm</button>
+          <button class="btn stop" onclick="cancelPaperResetConfirm()">Cancel</button>
         </div>
         <div class="bot-msg" id="paper-msg"></div>
       </div>
@@ -459,6 +465,9 @@ async function pollBotStatus() {
       text.textContent = s.running ? `running (pid ${s.pid})` : "stopped";
       document.getElementById(mode + "-start-btn").classList.toggle("disabled", s.running);
       document.getElementById(mode + "-stop-btn").classList.toggle("disabled", !s.running);
+      if (mode === "paper") {
+        document.getElementById("paper-reset-btn").classList.toggle("disabled", s.running);
+      }
     }
   } catch (e) {
     // leave last-known status displayed rather than flashing "checking..." on a transient error
@@ -583,6 +592,40 @@ function confirmStartLive() {
   }
   cancelLiveConfirm();
   startBot("live");
+}
+
+function showPaperResetConfirm() {
+  if (document.getElementById("paper-reset-btn").classList.contains("disabled")) return;
+  document.getElementById("paper-reset-confirm-row").style.display = "flex";
+  document.getElementById("paper-reset-confirm-input").value = "";
+  document.getElementById("paper-reset-confirm-input").focus();
+}
+
+function cancelPaperResetConfirm() {
+  document.getElementById("paper-reset-confirm-row").style.display = "none";
+}
+
+async function confirmPaperReset() {
+  const val = document.getElementById("paper-reset-confirm-input").value.trim();
+  if (val !== "RESET") {
+    setBotMsg("paper", 'type exactly "RESET" to confirm', true);
+    return;
+  }
+  cancelPaperResetConfirm();
+  setBotMsg("paper", "resetting…");
+  try {
+    const resp = await fetch("/api/paper/reset", {method: "POST"});
+    const data = await resp.json();
+    if (!resp.ok) {
+      setBotMsg("paper", data.error || ("HTTP " + resp.status), true);
+    } else {
+      setBotMsg("paper", `reset done — deleted ${data.deleted.length} file(s)`);
+    }
+  } catch (e) {
+    setBotMsg("paper", e.message, true);
+  }
+  poll();
+  pollBotStatus();
 }
 
 poll();

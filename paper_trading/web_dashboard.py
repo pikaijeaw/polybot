@@ -10,9 +10,10 @@ you like — to change ports, pull in a template edit, whatever — without
 ever interrupting the running bot, and vice versa. If this process crashes
 or hangs, the bot keeps trading uninterrupted.
 
-Read-only: never signs anything, places orders, or writes to the bot's
-state — only reads paper_state.json/paper_trades.jsonl and polls public
-price/chain data, same as dashboard.py (the terminal version).
+Mostly read-only: never signs anything or places orders, and only reads
+paper_state.json/paper_trades.jsonl and polls public price/chain data, same
+as dashboard.py (the terminal version) — with one deliberate exception,
+/api/paper/reset (see below), which deletes that state.
 
 Usage:
     python paper_trading/web_dashboard.py
@@ -32,6 +33,14 @@ duplicate. Starting live mode always re-checks preflight_check.py's full
 report first (/api/preflight) and refuses if it isn't READY; that gate
 can't be skipped from here. Keep --host at its 127.0.0.1 default unless you
 have a specific reason to expose these controls beyond localhost.
+
+/api/paper/reset (POST) permanently deletes paper_state.json,
+paper_trades.jsonl, and perf_logs/{signals,trades,executions}.csv — the
+paper bot's entire bankroll/position/history. It refuses (409) while the
+paper bot is running, same as it would corrupt state for the same reason
+two paper_trader.py instances aren't allowed to share one state file (see
+pidfile.py). This only ever touches paper-mode files; live_trading/ state
+is never in scope here.
 """
 
 import argparse
@@ -65,6 +74,7 @@ live_price = dash.LivePrice()
 wallet: dash.WalletWatcher = None  # constructed in main() once --rpc-url is known
 state_path = dash.DEFAULT_STATE_PATH
 trades_log_path = SCRIPT_DIR / "paper_trades.jsonl"
+PERF_LOG_DIR = SCRIPT_DIR / "perf_logs"
 
 # -- bot process control -----------------------------------------------------
 
@@ -326,6 +336,22 @@ def api_bot_stop():
         time.sleep(0.25)
     still_alive = pidfile.pid_is_alive(pid)
     return jsonify({"ok": not still_alive, "mode": mode, "pid": pid, "still_alive": still_alive})
+
+
+@app.route("/api/paper/reset", methods=["POST"])
+def api_paper_reset():
+    status = _bot_status("paper")
+    if status["running"]:
+        return jsonify({"error": f"paper bot is running (pid {status['pid']}) — stop it before resetting"}), 409
+
+    deleted = []
+    for path in [state_path, trades_log_path, *PERF_LOG_DIR.glob("*.csv")]:
+        try:
+            path.unlink()
+            deleted.append(str(path.relative_to(PROJECT_ROOT)))
+        except FileNotFoundError:
+            pass
+    return jsonify({"ok": True, "deleted": deleted})
 
 
 def load_trade_history(path: Path) -> list:

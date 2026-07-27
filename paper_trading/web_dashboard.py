@@ -35,20 +35,27 @@ Then open http://127.0.0.1:5000 in a browser. Polls this app's own
 
 Bot control plane: this process also owns start/stop/status for
 paper_trader.py (v1/v2/v3), gabagool_paper_trader.py (this directory), and
-live_trading/live_trader.py (see /api/bot/*), spawning
+live_trading/live_trader.py (v1/v2/v3 — see /api/bot/*), spawning
 each as its own subprocess and tracking liveness via a pidfile (pidfile.py)
 rather than an in-memory handle — that way a dashboard restart can still see
 whether a bot is running instead of losing track of it or spawning a
-duplicate. Starting live mode always re-checks preflight_check.py's full
-report first (/api/preflight) and refuses if it isn't READY; that gate can't
-be skipped from here. Keep --host at its 127.0.0.1 default unless you have a
-specific reason to expose these controls beyond localhost.
+duplicate. Starting any of "live"/"live_v2"/"live_v3" always re-checks
+preflight_check.py's full report first (/api/preflight) and refuses with
+HTTP 412 if it isn't READY (see LIVE_STRATEGIES — this gate applies to
+every live mode, not just the plain v1 one, so adding a live_v4 later means
+adding it to that tuple, not copy-pasting the check). That gate can't be
+skipped from here — and it's a backstop only: live_trader.py's own
+run_preflight_gate() reruns the same checks again inside the subprocess
+before it trades anything, so a bug in this dashboard's gate can block a
+start, never cause an unsafe one. Keep --host at its 127.0.0.1 default
+unless you have a specific reason to expose these controls beyond
+localhost.
 
 "paper" (oracle-lag v1, 5m), "oracle_v2" (oracle-lag v2 — same engine,
 three additional entry filters, see oracle_lag_strategy_v2.py), "oracle_v3"
 (oracle-lag v3 — v2's filters plus Kelly sizing that compounds off live
 equity instead of a fixed bankroll, see oracle_lag_strategy_v3.py), and
-"gabagool" (YES/NO order-book arbitrage, 15m) are four independent
+"gabagool" (YES/NO order-book arbitrage, 15m) are four independent paper
 strategies, all always-visible, all independently start/stop-able, and all
 rendered in parallel on one page — not a toggle between them. "paper",
 "oracle_v2", and "oracle_v3" run the exact same script (paper_trader.py
@@ -58,12 +65,23 @@ _oracle_v2_args/_oracle_v3_args, which have to explicitly override every
 one of paper_trader.py's --state-file/--trades-log/--pid-file/
 --autorestart-marker/--perf-log-dir so "oracle_v2"/"oracle_v3" don't
 silently share "paper"'s files (that script's own defaults for all five are
-identical regardless of --v2/--v3). /api/data returns all four states in
-one payload (see PAPER_STRATEGIES, _state_paths_for) rather than taking a
-selector; /api/report.csv and the reset endpoints still take a per-strategy
-target since a CSV export or a destructive reset is inherently a "pick one"
-action. "live" is its own fifth, differently-gated panel (preflight, typed
-confirmation) — see templates/dashboard.html.
+identical regardless of --v2/--v3). /api/data returns all four paper states
+in one payload under "bots" (see PAPER_STRATEGIES, _state_paths_for) rather
+than taking a selector; /api/report.csv and the reset endpoints still take
+a per-strategy target since a CSV export or a destructive reset is
+inherently a "pick one" action.
+
+"live"/"live_v2"/"live_v3" are the real-money counterparts, same
+--v2/--v3-selects-the-engine and explicit-path-override pattern as
+oracle_v2/oracle_v3 (see LIVE_V2_*/LIVE_V3_* constants,
+_live_v2_args/_live_v3_args) but pointed at live_trader.py instead of
+paper_trader.py. Their states are surfaced read-only via /api/data's
+"live_bots" key — a different JSON shape from the paper "bots" (see
+LiveTrader._write_state: no cash/equity/starting_bankroll, but a "caps"
+block) — so templates/dashboard.html renders them with a dedicated function
+rather than reusing the paper renderer. Deliberately no reset endpoint for
+any of the three: wiping a live trade history isn't something to expose as
+a dashboard button, unlike the paper strategies above.
 
 /api/paper/reset, /api/oracle_v2/reset, /api/oracle_v3/reset, and
 /api/gabagool/reset (POST) permanently delete their own bot's state/trades
@@ -137,6 +155,29 @@ ORACLE_V3_PID_PATH = SCRIPT_DIR / "paper_trader_v3.pid"
 ORACLE_V3_AUTORESTART_MARKER = SCRIPT_DIR / "paper_trader_v3.autorestart.json"
 ORACLE_V3_PERF_LOG_DIR = SCRIPT_DIR / "perf_logs_v3"
 
+# "live" (v1) uses live_trader.py's own --state-file/--trades-log/--pid-file
+# defaults directly (mirrored here, not imported, since live_trader.py is
+# only ever spawned as a subprocess — never imported as a module — to keep
+# this dashboard process from needing py_clob_client's full import graph
+# just to know a filename). "live_v2"/"live_v3" need the same explicit
+# override treatment as "oracle_v2"/"oracle_v3" above and for the identical
+# reason: live_trader.py's own defaults for all five flags don't vary with
+# --v2/--v3, so leaving any of them out would silently collide with "live".
+LIVE_STATE_PATH = LIVE_TRADING_DIR / "live_state.json"
+LIVE_TRADES_LOG_PATH = LIVE_TRADING_DIR / "live_trades.jsonl"
+
+LIVE_V2_STATE_PATH = LIVE_TRADING_DIR / "live_state_v2.json"
+LIVE_V2_TRADES_LOG_PATH = LIVE_TRADING_DIR / "live_trades_v2.jsonl"
+LIVE_V2_PID_PATH = LIVE_TRADING_DIR / "live_trader_v2.pid"
+LIVE_V2_AUTORESTART_MARKER = LIVE_TRADING_DIR / "live_trader_v2.autorestart.json"
+LIVE_V2_PERF_LOG_DIR = LIVE_TRADING_DIR / "perf_logs_v2"
+
+LIVE_V3_STATE_PATH = LIVE_TRADING_DIR / "live_state_v3.json"
+LIVE_V3_TRADES_LOG_PATH = LIVE_TRADING_DIR / "live_trades_v3.jsonl"
+LIVE_V3_PID_PATH = LIVE_TRADING_DIR / "live_trader_v3.pid"
+LIVE_V3_AUTORESTART_MARKER = LIVE_TRADING_DIR / "live_trader_v3.autorestart.json"
+LIVE_V3_PERF_LOG_DIR = LIVE_TRADING_DIR / "perf_logs_v3"
+
 BOT_SCRIPTS = {
     "paper": {
         "script": SCRIPT_DIR / "paper_trader.py",
@@ -174,8 +215,43 @@ BOT_SCRIPTS = {
         "pidfile": LIVE_TRADING_DIR / "live_trader.pid",
         "log": LIVE_TRADING_DIR / "bot.log",
     },
+    "live_v2": {
+        # Same script as "live" — live_trader.py's --v2 flag swaps in
+        # oracle_lag_strategy_v2.OracleLagEngineV2 (see _live_v2_args).
+        # Distinct pidfile/state/trades/log so it can run alongside "live"
+        # without either corrupting the other's history — same reasoning as
+        # "oracle_v2" vs "paper", except this one places real orders.
+        "script": LIVE_TRADING_DIR / "live_trader.py",
+        "pidfile": LIVE_V2_PID_PATH,
+        "log": LIVE_TRADING_DIR / "bot_v2.log",
+    },
+    "live_v3": {
+        # Same script again — live_trader.py's --v3 flag swaps in
+        # oracle_lag_strategy_v3.OracleLagEngineV3 (see _live_v3_args).
+        # Distinct pidfile/state/trades/log, same reasoning as "live_v2".
+        "script": LIVE_TRADING_DIR / "live_trader.py",
+        "pidfile": LIVE_V3_PID_PATH,
+        "log": LIVE_TRADING_DIR / "bot_v3.log",
+    },
 }
 bot_processes: dict = {}  # mode -> subprocess.Popen, only for processes THIS dashboard instance spawned
+
+# "live", "live_v2", "live_v3" — real-money counterparts to "paper"/
+# "oracle_v2"/"oracle_v3". Deliberately NOT part of PAPER_STRATEGIES (no
+# --reset endpoint exists or should exist for any of these — wiping a live
+# trade history is not something to expose as a dashboard button) but their
+# states are still surfaced read-only via /api/data's "live_bots" key so
+# the dashboard can show real positions/P&L, not just a running/stopped dot.
+LIVE_STRATEGIES = ("live", "live_v2", "live_v3")
+
+
+def _live_state_paths_for(mode: str) -> tuple:
+    if mode == "live_v2":
+        return LIVE_V2_STATE_PATH, LIVE_V2_TRADES_LOG_PATH
+    if mode == "live_v3":
+        return LIVE_V3_STATE_PATH, LIVE_V3_TRADES_LOG_PATH
+    return LIVE_STATE_PATH, LIVE_TRADES_LOG_PATH
+
 
 # "paper", "oracle_v2", "oracle_v3", and "gabagool" are four independent
 # strategies, each always visible and independently start/stop-able (see
@@ -204,9 +280,12 @@ def index():
 
 @app.route("/api/data")
 def api_data():
-    """Returns all three paper strategies' states in one payload — see
+    """Returns all four paper strategies' states in one payload — see
     module docstring: these render as parallel, always-visible panels now,
-    not a toggle, so there's no `?strategy=` selector to pick just one."""
+    not a toggle, so there's no `?strategy=` selector to pick just one.
+    Also returns "live_bots" (live/live_v2/live_v3) read-only, same shape
+    idea but a different state schema (see LiveTrader._write_state) — the
+    template uses a dedicated renderer for these, not renderDirectionalPanel."""
     live_price.maybe_refresh()
     wallet.maybe_refresh()
 
@@ -214,6 +293,11 @@ def api_data():
     for strategy in PAPER_STRATEGIES:
         sp, _ = _state_paths_for(strategy)
         bots[strategy] = dash.load_paper_state(sp)
+
+    live_bots = {}
+    for mode in LIVE_STRATEGIES:
+        sp, _ = _live_state_paths_for(mode)
+        live_bots[mode] = dash.load_paper_state(sp)
 
     return jsonify(
         {
@@ -227,6 +311,7 @@ def api_data():
                 "error": wallet.error,
             },
             "bots": bots,
+            "live_bots": live_bots,
         }
     )
 
@@ -366,6 +451,65 @@ def _live_args(payload: dict) -> list:
     return args
 
 
+def _live_v2_args(payload: dict) -> list:
+    """live_trader.py's --v2 flag plus v1's core live args (same script,
+    same core flags) — the four v2-only filter knobs are additive on top,
+    same as _oracle_v2_args for the paper side. Also passes
+    --state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir
+    explicitly (see LIVE_V2_* constants) for the identical reason
+    _oracle_v2_args does: live_trader.py's own defaults for all five don't
+    vary with --v2, so without this "live_v2" would silently collide with
+    "live" — for a real-money bot, "collide" here means two processes
+    fighting over one pidfile/state file, not just confusing paper stats."""
+    return _live_args(payload) + [
+        "--v2",
+        "--min-prob",
+        str(_float_param(payload, "min_prob", strategy_v2.DEFAULT_MIN_PROB, lo=0.0, hi=1.0)),
+        "--safety-factor",
+        str(_float_param(payload, "safety_factor", strategy_v2.DEFAULT_SAFETY_FACTOR, lo=0.0, hi=1.0)),
+        "--entry-window-start",
+        str(_float_param(payload, "entry_window_start", strategy_v2.DEFAULT_ENTRY_WINDOW_START, lo=0.0, hi=3600.0)),
+        "--entry-window-end",
+        str(_float_param(payload, "entry_window_end", strategy_v2.DEFAULT_ENTRY_WINDOW_END, lo=0.0, hi=3600.0)),
+        "--state-file",
+        str(LIVE_V2_STATE_PATH),
+        "--trades-log",
+        str(LIVE_V2_TRADES_LOG_PATH),
+        "--pid-file",
+        str(LIVE_V2_PID_PATH),
+        "--autorestart-marker",
+        str(LIVE_V2_AUTORESTART_MARKER),
+        "--perf-log-dir",
+        str(LIVE_V2_PERF_LOG_DIR),
+    ]
+
+
+def _live_v3_args(payload: dict) -> list:
+    """Same shape as _live_v2_args but --v3 and LIVE_V3_* paths — see that
+    function's docstring."""
+    return _live_args(payload) + [
+        "--v3",
+        "--min-prob",
+        str(_float_param(payload, "min_prob", strategy_v3.DEFAULT_MIN_PROB, lo=0.0, hi=1.0)),
+        "--safety-factor",
+        str(_float_param(payload, "safety_factor", strategy_v3.DEFAULT_SAFETY_FACTOR, lo=0.0, hi=1.0)),
+        "--entry-window-start",
+        str(_float_param(payload, "entry_window_start", strategy_v3.DEFAULT_ENTRY_WINDOW_START, lo=0.0, hi=3600.0)),
+        "--entry-window-end",
+        str(_float_param(payload, "entry_window_end", strategy_v3.DEFAULT_ENTRY_WINDOW_END, lo=0.0, hi=3600.0)),
+        "--state-file",
+        str(LIVE_V3_STATE_PATH),
+        "--trades-log",
+        str(LIVE_V3_TRADES_LOG_PATH),
+        "--pid-file",
+        str(LIVE_V3_PID_PATH),
+        "--autorestart-marker",
+        str(LIVE_V3_AUTORESTART_MARKER),
+        "--perf-log-dir",
+        str(LIVE_V3_PERF_LOG_DIR),
+    ]
+
+
 # Every mode's args builder in one place — api_bot_start dispatches through
 # this instead of an if/else chain, so adding a strategy means adding one
 # entry here rather than another branch.
@@ -375,6 +519,8 @@ ARGS_BUILDERS = {
     "oracle_v3": _oracle_v3_args,
     "gabagool": _gabagool_args,
     "live": _live_args,
+    "live_v2": _live_v2_args,
+    "live_v3": _live_v3_args,
 }
 
 
@@ -481,7 +627,7 @@ def api_bot_start():
         return jsonify({"error": f"{mode} bot already running (pid {status['pid']})"}), 409
 
     info = BOT_SCRIPTS[mode]
-    if mode == "live":
+    if mode in LIVE_STRATEGIES:
         ready, results = _run_preflight_cached(force=True)  # always fresh right before spending real money
         if not ready:
             return jsonify({"error": "preflight check failed — live trading refused", "preflight": results}), 412

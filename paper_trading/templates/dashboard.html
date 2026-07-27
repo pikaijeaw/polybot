@@ -131,6 +131,15 @@
   .confirm-row input { flex: 1; background: var(--bg); border: 1px solid var(--panel-border); color: var(--text); border-radius: 5px; padding: 5px 6px; font-family: var(--mono); font-size: 11.5px; }
   .bot-msg { font-size: 11px; margin-bottom: 6px; color: var(--text-dim); min-height: 14px; }
   .bot-msg.err { color: var(--red); }
+
+  .mode-toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .mode-btn {
+    font-family: var(--sans); font-size: 10px; font-weight: 700; letter-spacing: 0.3px;
+    padding: 3px 10px; border-radius: 5px; border: 1px solid var(--panel-border);
+    background: var(--bg); color: var(--text-dim); cursor: pointer;
+  }
+  .mode-btn.active { background: var(--panel-border); color: var(--text); }
+  .mode-btn.live-btn.active { background: #3a1a1e; color: var(--red); border-color: var(--red); }
 </style>
 </head>
 <body>
@@ -186,6 +195,12 @@
 
   <div class="bot-panel paperv2-panel">
     <h3>Oracle-Lag v2<span class="sub">5m — same engine + prob floor, safety-factor, entry window</span></h3>
+    <div class="mode-toggle">
+      <span class="dim" style="font-size:10px;">Mode:</span>
+      <button type="button" class="mode-btn active" id="oracle_v2-mode-paper-btn" onclick="setPanelMode('oracle_v2','paper')">Paper</button>
+      <button type="button" class="mode-btn live-btn" id="oracle_v2-mode-live-btn" onclick="setPanelMode('oracle_v2','live')">Live</button>
+      <span class="preflight-badge checking" id="oracle_v2-preflight-badge" style="display:none;">preflight: click Start Live to check</span>
+    </div>
     <div class="bot-status-line"><span class="bot-dot" id="oracle_v2-dot"></span><span id="oracle_v2-status-text">checking…</span></div>
     <div id="oracle_v2-engine"></div>
     <div id="oracle_v2-stats"></div>
@@ -202,7 +217,14 @@
       <label>Entry window start (s)<input type="number" id="oracle_v2-entry-start" value="240" step="10"></label>
       <label>Entry window end (s)<input type="number" id="oracle_v2-entry-end" value="10" step="5"></label>
     </div>
-    <div class="bot-actions">
+    <div class="bot-fields" id="oracle_v2-live-caps" style="display:none;margin-top:6px;">
+      <label>Max stake/trade ($)<input type="number" id="oracle_v2-live-max-stake" value="2" step="0.5"></label>
+      <label>Max trades/hour<input type="number" id="oracle_v2-live-max-hour" value="4" step="1"></label>
+      <label>Max trades/day<input type="number" id="oracle_v2-live-max-day" value="20" step="1"></label>
+      <label>Max open positions<input type="number" id="oracle_v2-live-max-open" value="1" step="1"></label>
+      <label>Max daily loss ($, optional)<input type="number" id="oracle_v2-live-max-daily-loss" placeholder="disabled" step="1"></label>
+    </div>
+    <div class="bot-actions" id="oracle_v2-paper-actions">
       <button class="btn v2" id="oracle_v2-start-btn" onclick="startBot('oracle_v2')">Start</button>
       <button class="btn stop" id="oracle_v2-stop-btn" onclick="stopBot('oracle_v2')">Stop</button>
       <button class="btn danger" id="oracle_v2-reset-btn" onclick="showResetConfirm('oracle_v2')">Reset</button>
@@ -212,11 +234,28 @@
       <button class="btn danger" onclick="confirmReset('oracle_v2')">Confirm</button>
       <button class="btn stop" onclick="cancelResetConfirm('oracle_v2')">Cancel</button>
     </div>
+    <div class="bot-actions" id="oracle_v2-live-actions" style="display:none;">
+      <button class="btn danger" id="oracle_v2-live-start-btn" onclick="onClickStartLiveFor('oracle_v2')">Start Live</button>
+      <button class="btn stop" id="oracle_v2-live-stop-btn" onclick="stopLiveBotFor('oracle_v2')">Stop</button>
+    </div>
+    <div class="confirm-row" id="oracle_v2-live-confirm-row" style="display:none;">
+      <input type="text" id="oracle_v2-live-confirm-input" placeholder="Type START LIVE to confirm">
+      <button class="btn danger" onclick="confirmStartLiveFor('oracle_v2')">Confirm</button>
+      <button class="btn stop" onclick="cancelLiveConfirmFor('oracle_v2')">Cancel</button>
+    </div>
+    <div class="preflight-fails" id="oracle_v2-preflight-fails" style="display:none;"></div>
     <div class="bot-msg" id="oracle_v2-msg"></div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;display:none;" id="oracle_v2-live-note">Live mode places real orders automatically once started (no per-trade confirmation) — gated by the caps above and refuses to start unless preflight_check.py reports READY.</div>
   </div>
 
   <div class="bot-panel paperv3-panel">
     <h3>Oracle-Lag v3<span class="sub">5m — v2 filters + Kelly sizing that compounds off live equity</span></h3>
+    <div class="mode-toggle">
+      <span class="dim" style="font-size:10px;">Mode:</span>
+      <button type="button" class="mode-btn active" id="oracle_v3-mode-paper-btn" onclick="setPanelMode('oracle_v3','paper')">Paper</button>
+      <button type="button" class="mode-btn live-btn" id="oracle_v3-mode-live-btn" onclick="setPanelMode('oracle_v3','live')">Live</button>
+      <span class="preflight-badge checking" id="oracle_v3-preflight-badge" style="display:none;">preflight: click Start Live to check</span>
+    </div>
     <div class="bot-status-line"><span class="bot-dot" id="oracle_v3-dot"></span><span id="oracle_v3-status-text">checking…</span></div>
     <div id="oracle_v3-engine"></div>
     <div id="oracle_v3-stats"></div>
@@ -233,7 +272,14 @@
       <label>Entry window start (s)<input type="number" id="oracle_v3-entry-start" value="240" step="10"></label>
       <label>Entry window end (s)<input type="number" id="oracle_v3-entry-end" value="10" step="5"></label>
     </div>
-    <div class="bot-actions">
+    <div class="bot-fields" id="oracle_v3-live-caps" style="display:none;margin-top:6px;">
+      <label>Max stake/trade ($)<input type="number" id="oracle_v3-live-max-stake" value="2" step="0.5"></label>
+      <label>Max trades/hour<input type="number" id="oracle_v3-live-max-hour" value="4" step="1"></label>
+      <label>Max trades/day<input type="number" id="oracle_v3-live-max-day" value="20" step="1"></label>
+      <label>Max open positions<input type="number" id="oracle_v3-live-max-open" value="1" step="1"></label>
+      <label>Max daily loss ($, optional)<input type="number" id="oracle_v3-live-max-daily-loss" placeholder="disabled" step="1"></label>
+    </div>
+    <div class="bot-actions" id="oracle_v3-paper-actions">
       <button class="btn v3" id="oracle_v3-start-btn" onclick="startBot('oracle_v3')">Start</button>
       <button class="btn stop" id="oracle_v3-stop-btn" onclick="stopBot('oracle_v3')">Stop</button>
       <button class="btn danger" id="oracle_v3-reset-btn" onclick="showResetConfirm('oracle_v3')">Reset</button>
@@ -243,8 +289,19 @@
       <button class="btn danger" onclick="confirmReset('oracle_v3')">Confirm</button>
       <button class="btn stop" onclick="cancelResetConfirm('oracle_v3')">Cancel</button>
     </div>
+    <div class="bot-actions" id="oracle_v3-live-actions" style="display:none;">
+      <button class="btn danger" id="oracle_v3-live-start-btn" onclick="onClickStartLiveFor('oracle_v3')">Start Live</button>
+      <button class="btn stop" id="oracle_v3-live-stop-btn" onclick="stopLiveBotFor('oracle_v3')">Stop</button>
+    </div>
+    <div class="confirm-row" id="oracle_v3-live-confirm-row" style="display:none;">
+      <input type="text" id="oracle_v3-live-confirm-input" placeholder="Type START LIVE to confirm">
+      <button class="btn danger" onclick="confirmStartLiveFor('oracle_v3')">Confirm</button>
+      <button class="btn stop" onclick="cancelLiveConfirmFor('oracle_v3')">Cancel</button>
+    </div>
+    <div class="preflight-fails" id="oracle_v3-preflight-fails" style="display:none;"></div>
     <div class="bot-msg" id="oracle_v3-msg"></div>
-    <div class="dim" style="font-size:10.5px;margin-top:4px;">"Bankroll" here only sets the starting/reference value — stakes compound off actual live equity as it grows or shrinks, unlike v1/v2 which size off this number for the whole run.</div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;" id="oracle_v3-paper-note">"Bankroll" here only sets the starting/reference value — stakes compound off actual live equity as it grows or shrinks, unlike v1/v2 which size off this number for the whole run.</div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;display:none;" id="oracle_v3-live-note">Live mode places real orders automatically once started (no per-trade confirmation) — gated by the caps above and refuses to start unless preflight_check.py reports READY. Bankroll compounds off LiveTrader.equity() (--bankroll + realized P&amp;L) — see oracle_lag_strategy_v3.py's docstring for its restart-window caveat.</div>
   </div>
 
   <div class="bot-panel gaba-panel">
@@ -435,6 +492,109 @@ function renderDirectionalPanel(mode, state) {
   ordersEl.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Status</th><th>Side</th><th>Entry</th><th>Stake</th><th>P&amp;L / T-remaining</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+// -- Live oracle-lag panels (v2/v3 toggled to Live mode — different state
+// shape from paper: no cash/equity/starting_bankroll, but a "caps" block —
+// see LiveTrader._write_state) -------------------------------------------
+
+const LIVE_MODE_FOR = {oracle_v2: "live_v2", oracle_v3: "live_v3"};
+let panelMode = {oracle_v2: "paper", oracle_v3: "paper"};
+let panelPreflightReady = {oracle_v2: false, oracle_v3: false};
+let lastData = null;
+
+function renderLivePanel(mode, state) {
+  const engineEl = document.getElementById(`${mode}-engine`);
+  const statsEl = document.getElementById(`${mode}-stats`);
+  const ordersEl = document.getElementById(`${mode}-orders`);
+
+  if (!state) {
+    engineEl.innerHTML = "";
+    statsEl.innerHTML = "";
+    ordersEl.innerHTML = `<div class="empty">no live data yet — not started, or preflight hasn't passed</div>`;
+    return;
+  }
+
+  const engine = state.engine;
+  let eHtml = "";
+  if (engine) {
+    const approx = engine.anchor_is_approximate ? "~" : "";
+    eHtml += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug || "-")}</span></div>`;
+    eHtml += `<div class="row"><span class="label">Anchor / closes in</span><span class="value">${approx}${fmtNum(engine.anchor_price)} · ${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
+    if (engine.up_edge !== null && engine.up_edge !== undefined) {
+      const upCls = engine.up_edge > 0 ? "pos" : "neg";
+      const downCls = (engine.down_edge || 0) > 0 ? "pos" : "neg";
+      eHtml += `<div class="edge-row"><span class="side">Up</span><span class="metrics ${upCls}">ask ${fmtNum(engine.up_ask, 3)} · edge ${fmtPct(engine.up_edge)}</span></div>`;
+      eHtml += `<div class="edge-row"><span class="side">Down</span><span class="metrics ${downCls}">ask ${fmtNum(engine.down_ask, 3)} · edge ${fmtPct(engine.down_edge)}</span></div>`;
+    }
+  }
+  engineEl.innerHTML = eHtml;
+
+  const stats = state.stats || {};
+  const caps = state.caps || {};
+  const pnlCls = (stats.realized_pnl || 0) >= 0 ? "pos" : "neg real";
+  let flags = "";
+  if (state.dry_run) flags += `<span class="dim">DRY RUN</span> `;
+  if (caps.daily_loss_guard_tripped) flags += `<span class="neg real">loss-guard tripped</span> `;
+  if (caps.clob_circuit_breaker_tripped) flags += `<span class="neg real">CLOB breaker tripped</span> `;
+  if (caps.ghost_fill_halted) flags += `<span class="neg real">GHOST FILL HALT</span> `;
+  statsEl.innerHTML = `
+    <div class="row"><span class="label">Est. realized P&amp;L</span><span class="value ${pnlCls}">${fmtMoney(stats.realized_pnl, true)}</span></div>
+    <div class="stat-strip">
+      <div class="stat"><span class="label">Trades</span><span class="value">${stats.trades || 0}</span></div>
+      <div class="stat"><span class="label">Win rate</span><span class="value">${fmtPct(stats.win_rate, false)}</span></div>
+      <div class="stat"><span class="label">Caps ($/hr/day)</span><span class="value">${fmtMoney(caps.max_stake_usd)} / ${caps.max_trades_per_hour ?? "-"} / ${caps.max_trades_per_day ?? "-"}</span></div>
+    </div>
+    ${flags ? `<div style="font-size:10.5px;margin-top:2px;">${flags}</div>` : ""}`;
+
+  const open = state.open_positions || [];
+  const closed = (state.recent_closed || []).slice().reverse();
+  if (open.length === 0 && closed.length === 0) {
+    ordersEl.innerHTML = `<div class="empty">No live trades yet.</div>`;
+    return;
+  }
+  let rows = "";
+  const now = Date.now() / 1000;
+  for (const p of open) {
+    const remaining = p.end_epoch - now;
+    rows += `<tr><td><span class="badge OPEN">OPEN</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td>T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s</td></tr>`;
+  }
+  for (const p of closed.slice(0, 10)) {
+    rows += `<tr><td><span class="badge ${p.status}">${esc(p.status)}</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td class="${(p.pnl_usd || 0) >= 0 ? 'pos' : 'neg real'}">${fmtMoney(p.pnl_usd, true)}</td></tr>`;
+  }
+  ordersEl.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Status</th><th>Side</th><th>Entry</th><th>Stake</th><th>Est. P&amp;L / T-remaining</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderPanelForMode(paperMode) {
+  if (!lastData) return;
+  if (panelMode[paperMode] === "live") {
+    renderLivePanel(paperMode, lastData.live_bots[LIVE_MODE_FOR[paperMode]]);
+  } else {
+    renderDirectionalPanel(paperMode, lastData.bots[paperMode]);
+  }
+}
+
+function setPanelMode(paperMode, newMode) {
+  panelMode[paperMode] = newMode;
+  document.getElementById(`${paperMode}-mode-paper-btn`).classList.toggle("active", newMode === "paper");
+  document.getElementById(`${paperMode}-mode-live-btn`).classList.toggle("active", newMode === "live");
+  document.getElementById(`${paperMode}-live-caps`).style.display = newMode === "live" ? "grid" : "none";
+  document.getElementById(`${paperMode}-paper-actions`).style.display = newMode === "paper" ? "flex" : "none";
+  document.getElementById(`${paperMode}-live-actions`).style.display = newMode === "live" ? "flex" : "none";
+  document.getElementById(`${paperMode}-preflight-badge`).style.display = newMode === "live" ? "inline-block" : "none";
+  const liveNote = document.getElementById(`${paperMode}-live-note`);
+  if (liveNote) liveNote.style.display = newMode === "live" ? "block" : "none";
+  const paperNote = document.getElementById(`${paperMode}-paper-note`);
+  if (paperNote) paperNote.style.display = newMode === "paper" ? "block" : "none";
+  if (newMode === "paper") {
+    document.getElementById(`${paperMode}-live-confirm-row`).style.display = "none";
+    document.getElementById(`${paperMode}-preflight-fails`).style.display = "none";
+  } else {
+    document.getElementById(`${paperMode}-reset-confirm-row`).style.display = "none";
+  }
+  setBotMsg(paperMode, "");
+  renderPanelForMode(paperMode);
+  pollBotStatus();
+}
+
 // -- Gabagool (different shape — see gabagool_strategy.py docstring) -----
 
 function renderGabagoolPanel(state) {
@@ -484,11 +644,12 @@ async function poll() {
     const resp = await fetch("/api/data", {cache: "no-store"});
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
+    lastData = data;
     renderPrice(data);
     renderWallet(data);
     renderDirectionalPanel("paper", data.bots.paper);
-    renderDirectionalPanel("oracle_v2", data.bots.oracle_v2);
-    renderDirectionalPanel("oracle_v3", data.bots.oracle_v3);
+    renderPanelForMode("oracle_v2");
+    renderPanelForMode("oracle_v3");
     renderGabagoolPanel(data.bots.gabagool);
     dot.className = "dot live";
     text.textContent = "live · " + new Date(data.server_time * 1000).toLocaleTimeString();
@@ -513,7 +674,9 @@ async function pollBotStatus() {
     const resp = await fetch("/api/bot/status", {cache: "no-store"});
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
-    for (const mode of ["paper", "oracle_v2", "oracle_v3", "gabagool", "live"]) {
+
+    // Single-mode panels: paper (v1), gabagool, live (v1, bottom panel).
+    for (const mode of ["paper", "gabagool", "live"]) {
       const s = data[mode];
       const dot = document.getElementById(mode + "-dot");
       const text = document.getElementById(mode + "-status-text");
@@ -523,6 +686,30 @@ async function pollBotStatus() {
       document.getElementById(mode + "-stop-btn").classList.toggle("disabled", !s.running);
       const resetBtn = document.getElementById(mode + "-reset-btn");
       if (resetBtn) resetBtn.classList.toggle("disabled", s.running);
+    }
+
+    // Toggleable panels: oracle_v2/oracle_v3 each back TWO independent bots
+    // (paper + live) sharing one status dot (whichever mode is currently
+    // displayed) but independently-tracked action buttons, so flipping
+    // Paper/Live never shows a stale enabled/disabled state for either.
+    for (const paperMode of Object.keys(LIVE_MODE_FOR)) {
+      const liveMode = LIVE_MODE_FOR[paperMode];
+      const paperStatus = data[paperMode];
+      const liveStatus = data[liveMode];
+
+      document.getElementById(`${paperMode}-start-btn`).classList.toggle("disabled", paperStatus.running);
+      document.getElementById(`${paperMode}-stop-btn`).classList.toggle("disabled", !paperStatus.running);
+      document.getElementById(`${paperMode}-reset-btn`).classList.toggle("disabled", paperStatus.running);
+      document.getElementById(`${paperMode}-live-start-btn`).classList.toggle("disabled", liveStatus.running);
+      document.getElementById(`${paperMode}-live-stop-btn`).classList.toggle("disabled", !liveStatus.running);
+
+      const active = panelMode[paperMode] === "live" ? liveStatus : paperStatus;
+      const dot = document.getElementById(`${paperMode}-dot`);
+      const text = document.getElementById(`${paperMode}-status-text`);
+      dot.className = "bot-dot" + (active.running ? " on" : "");
+      text.textContent = active.running
+        ? `${panelMode[paperMode]} running (pid ${active.pid})`
+        : `${panelMode[paperMode]} stopped`;
     }
   } catch (e) {
     // leave last-known status displayed rather than flashing "checking..." on a transient error
@@ -563,10 +750,14 @@ async function onClickStartLive() {
   }
 }
 
-function paramsFor(mode) {
+function paramsFor(mode, isLive) {
   if (mode === "paper" || mode === "oracle_v2" || mode === "oracle_v3") {
-    // All three accept the same core flags — they're all paper_trader.py,
-    // oracle_v2/oracle_v3 the same script with --v2/--v3 (see its argparse).
+    // All three accept the same core flags — they're all paper_trader.py
+    // (or, when isLive, live_trader.py), oracle_v2/oracle_v3 the same
+    // script with --v2/--v3 (see its argparse). Bankroll/min-edge/etc are
+    // shared fields between a panel's Paper and Live modes on purpose —
+    // it's the same strategy parameters either way, just simulated vs real
+    // order placement. isLive adds the live-only caps on top.
     const maxOpen = document.getElementById(`${mode}-max-open`).value;
     const params = {
       bankroll: document.getElementById(`${mode}-bankroll`).value,
@@ -580,6 +771,14 @@ function paramsFor(mode) {
       params.safety_factor = document.getElementById(`${mode}-safety-factor`).value;
       params.entry_window_start = document.getElementById(`${mode}-entry-start`).value;
       params.entry_window_end = document.getElementById(`${mode}-entry-end`).value;
+    }
+    if (isLive) {
+      params.max_stake_usd = document.getElementById(`${mode}-live-max-stake`).value;
+      params.max_trades_per_hour = document.getElementById(`${mode}-live-max-hour`).value;
+      params.max_trades_per_day = document.getElementById(`${mode}-live-max-day`).value;
+      params.max_open_positions = document.getElementById(`${mode}-live-max-open`).value;
+      const maxDailyLoss = document.getElementById(`${mode}-live-max-daily-loss`).value;
+      params.max_daily_loss_usd = maxDailyLoss === "" ? null : maxDailyLoss;
     }
     return params;
   }
@@ -664,6 +863,104 @@ function confirmStartLive() {
   }
   cancelLiveConfirm();
   startBot("live");
+}
+
+// -- Live mode for the oracle_v2/oracle_v3 panels — same preflight + typed
+// "START LIVE" confirmation as the bottom v1 live panel above, just
+// parameterized per panel and targeting live_v2/live_v3 instead of live --
+async function onClickStartLiveFor(paperMode) {
+  await checkPreflightFor(paperMode);
+  if (panelPreflightReady[paperMode]) {
+    showLiveConfirmFor(paperMode);
+  } else {
+    setBotMsg(paperMode, "preflight not ready — see failing checks above", true);
+  }
+}
+
+async function checkPreflightFor(paperMode) {
+  const badge = document.getElementById(`${paperMode}-preflight-badge`);
+  const failsEl = document.getElementById(`${paperMode}-preflight-fails`);
+  badge.textContent = "preflight: checking…";
+  badge.className = "preflight-badge checking";
+  try {
+    const resp = await fetch("/api/preflight?force=1", {cache: "no-store"});
+    const data = await resp.json();
+    panelPreflightReady[paperMode] = !!data.ready;
+    badge.textContent = panelPreflightReady[paperMode] ? "preflight: READY" : "preflight: NOT READY";
+    badge.className = "preflight-badge " + (panelPreflightReady[paperMode] ? "ready" : "not-ready");
+    const fails = (data.results || []).filter(r => r.status === "FAIL");
+    failsEl.style.display = fails.length ? "block" : "none";
+    failsEl.innerHTML = fails.length
+      ? fails.map(r => esc(`[FAIL] ${r.section} ${r.name}: ${r.detail}`)).join("<br>")
+      : "";
+  } catch (e) {
+    panelPreflightReady[paperMode] = false;
+    badge.textContent = "preflight: error";
+    badge.className = "preflight-badge not-ready";
+  }
+}
+
+function showLiveConfirmFor(paperMode) {
+  if (!panelPreflightReady[paperMode]) return;
+  document.getElementById(`${paperMode}-live-confirm-row`).style.display = "flex";
+  document.getElementById(`${paperMode}-live-confirm-input`).value = "";
+  document.getElementById(`${paperMode}-live-confirm-input`).focus();
+}
+
+function cancelLiveConfirmFor(paperMode) {
+  document.getElementById(`${paperMode}-live-confirm-row`).style.display = "none";
+}
+
+function confirmStartLiveFor(paperMode) {
+  const val = document.getElementById(`${paperMode}-live-confirm-input`).value.trim();
+  if (val !== "START LIVE") {
+    setBotMsg(paperMode, 'type exactly "START LIVE" to confirm', true);
+    return;
+  }
+  cancelLiveConfirmFor(paperMode);
+  startLiveBotFor(paperMode);
+}
+
+async function startLiveBotFor(paperMode) {
+  const liveMode = LIVE_MODE_FOR[paperMode];
+  setBotMsg(paperMode, "starting live…");
+  try {
+    const resp = await fetch("/api/bot/start", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: liveMode, ...paramsFor(paperMode, true)}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setBotMsg(paperMode, data.error || ("HTTP " + resp.status), true);
+    } else {
+      setBotMsg(paperMode, `live started (pid ${data.pid})`);
+    }
+  } catch (e) {
+    setBotMsg(paperMode, e.message, true);
+  }
+  pollBotStatus();
+}
+
+async function stopLiveBotFor(paperMode) {
+  const liveMode = LIVE_MODE_FOR[paperMode];
+  setBotMsg(paperMode, "stopping live…");
+  try {
+    const resp = await fetch("/api/bot/stop", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: liveMode}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setBotMsg(paperMode, data.error || ("HTTP " + resp.status), true);
+    } else {
+      setBotMsg(paperMode, data.ok ? "live stopped" : "still shutting down…");
+    }
+  } catch (e) {
+    setBotMsg(paperMode, e.message, true);
+  }
+  pollBotStatus();
 }
 
 // -- reset (paper, oracle_v2, oracle_v3, gabagool — see web_dashboard.py docstring) --

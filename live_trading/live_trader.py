@@ -10,8 +10,9 @@ Safety model (deliberately different from order_executor.py's dry-run /
 so a per-trade prompt would just hang forever on a closed stdin):
 
   1. preflight_check.py's checks MUST all pass before this process will even
-     start trading (wallet funded, CLOB auth working, USDC allowance
-     approved). Not skippable via any flag. See run_preflight_gate().
+     start trading (Deposit Wallet funded with pUSD, CLOB auth working,
+     pUSD allowance approved). Not skippable via any flag. See
+     run_preflight_gate().
   2. --max-stake-usd is a hard per-trade cap in USD, enforced via
      order_executor.check_market_order (the exact same risk check
      order_executor.py itself uses) — never overridden by Kelly sizing.
@@ -22,14 +23,15 @@ so a per-trade prompt would just hang forever on a closed stdin):
      not total daily drawdown — a string of losses within the rate limit
      could still exceed what you meant to risk in a day. Worth setting
      explicitly (e.g. a fraction of --bankroll) if you care about that.
-  5. ClobHealthBreaker pings client.get_ok() immediately before every real
-     order submission and halts new trades after
-     --clob-max-consecutive-failures in a row (default 3), auto-resuming
-     the moment a check succeeds again — a defense against trading on a
-     degraded/unresponsive CLOB, independent of signal quality or the caps
-     above. See its class docstring.
+  5. ClobHealthBreaker pings a cheap unauthenticated endpoint (see its class
+     docstring — polymarket-client has no direct health-check method)
+     immediately before every real order submission and halts new trades
+     after --clob-max-consecutive-failures in a row (default 3),
+     auto-resuming the moment a check succeeds again — a defense against
+     trading on a degraded/unresponsive CLOB, independent of signal quality
+     or the caps above.
   6. Ghost-fill detection: if an order submission raises an exception, this
-     bot re-checks the real USDC balance before concluding the order truly
+     bot re-checks the real pUSD balance before concluding the order truly
      failed — a network exception doesn't guarantee the order didn't fill
      on-chain anyway. A balance drop with no matching recorded position
      halts ALL further trading (does NOT auto-resume, unlike #5) and sends
@@ -48,15 +50,14 @@ LiveTrader.equity(). #5 and #6 above apply either way — they're
 execution-layer hardening, independent of which engine is picking signals.
 v1 remains the default.
 
-Order submission reuses order_executor's create_market_order/post_order
-call directly (the exact signing path already exercised by order_executor.py
-itself) rather than reimplementing it — see submit_live_market_order(). A
-reference bot this was compared against warned of float-precision bugs in
-naive `1 - price` arithmetic breaking order construction; verified directly
-against this repo's pinned py_clob_client==0.34.6 that its own
-get_order_amounts()/get_market_order_amounts() already correct for this
-(decimal-places-aware rounding before the final int() conversion) — no
-change was needed here.
+Order submission calls polymarket-client's SecureClient.create_market_order/
+post_order directly (the exact signing path order_executor.py itself
+exercises) rather than reimplementing it — see submit_live_market_order().
+post_order() returns a typed AcceptedOrder | RejectedOrder rather than
+raising on rejection; submit_live_market_order() converts a RejectedOrder
+into a raised PolymarketError so the existing try/except in _maybe_open
+(order_submit_failed + ghost-fill check) handles it identically to a
+network/transport failure.
 
 Scope limits, read before trusting the numbers this bot reports:
   - Positions are tracked and reported (OPEN/WON/LOST, estimated P&L) by
@@ -106,7 +107,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import requests
-from py_clob_client.clob_types import AssetType, BalanceAllowanceParams, MarketOrderArgs, OrderType
+from polymarket import PolymarketError, PublicClient
 
 # This script lives in live_trading/ but the root-level modules it depends on
 # do not — put the project root on sys.path before importing them, regardless
@@ -207,14 +208,15 @@ class ClobHealthBreaker:
     """Circuit breaker on CLOB reachability, checked immediately before each
     real order submission (not on every market-poll tick — that would ping
     an endpoint dozens of times a minute for no reason, since a poll only
-    reaches this point when a signal is about to be acted on). Pings
-    client.get_ok() — Polymarket's unauthenticated health endpoint, the same
-    one preflight_check.py already uses once at startup — and halts new
-    trades after max_consecutive_failures in a row, auto-resuming the moment
-    a check succeeds again. Unlike RateLimiter/DailyLossGuard this doesn't
-    mark the market slug as traded on a trip (see _maybe_open) — a CLOB
-    outage is exactly the kind of transient condition worth retrying on the
-    next poll within the same window, not giving up on for the full 5
+    reaches this point when a signal is about to be acted on). Pings a cheap
+    unauthenticated endpoint (list_markets(page_size=1) via PublicClient —
+    polymarket-client has no direct get_ok()-style health check, this is the
+    same lightweight probe preflight_check.py's Level-0 check uses) and
+    halts new trades after max_consecutive_failures in a row, auto-resuming
+    the moment a check succeeds again. Unlike RateLimiter/DailyLossGuard this
+    doesn't mark the market slug as traded on a trip (see _maybe_open) — a
+    CLOB outage is exactly the kind of transient condition worth retrying on
+    the next poll within the same window, not giving up on for the full 5
     minutes."""
 
     def __init__(self, max_consecutive_failures: int = 3):
@@ -224,7 +226,8 @@ class ClobHealthBreaker:
 
     def check(self, client) -> bool:
         try:
-            client.get_ok()
+            with PublicClient(environment=client.environment) as public_client:
+                public_client.list_markets(page_size=1).first_page()
         except Exception as e:
             self._consecutive_failures += 1
             print(
@@ -256,12 +259,11 @@ class ClobHealthBreaker:
 # ---------------------------------------------------------------------------
 
 
-def run_preflight_gate(client, address: str, rpc_url: str, chain_id: int) -> bool:
+def run_preflight_gate(client, rpc_url: str) -> bool:
     """Runs the exact same checks as `python preflight_check.py` (calling its
     functions directly, not reimplementing them) and returns True only if
     every section passed. This is the mandatory gate — there is no flag to
     bypass it."""
-    from py_clob_client.config import get_contract_config
     from web3 import Web3
 
     w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
@@ -269,9 +271,8 @@ def run_preflight_gate(client, address: str, rpc_url: str, chain_id: int) -> boo
         print(f"preflight gate: could not connect to RPC {rpc_url}", file=sys.stderr)
         return False
 
-    collateral_address = get_contract_config(chain_id).collateral
-    results = preflight.run_all_checks(address, w3, collateral_address, client)
-    return preflight.print_report(results, address)
+    results = preflight.run_all_checks(client, w3)
+    return preflight.print_report(results, client.wallet)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +291,7 @@ def submit_live_market_order(
     for the confirmation prompt, see check_market_order below)."""
     reference_price = None
     try:
-        reference_price = float(client.get_price(token_id, side)["price"])
+        reference_price = float(client.get_price(token_id=token_id, side=side))
     except Exception:
         pass
     order_executor.check_market_order(limits, side, amount_usd, reference_price)  # raises RiskCheckFailed over cap
@@ -299,9 +300,14 @@ def submit_live_market_order(
         print(f"[DRY RUN] would place MARKET {side} token_id={token_id} amount=${amount_usd:.2f}", file=sys.stderr)
         return None
 
-    order_args = MarketOrderArgs(token_id=token_id, amount=amount_usd, side=side, order_type=OrderType.FOK)
-    signed_order = client.create_market_order(order_args)
-    return client.post_order(signed_order, orderType=OrderType.FOK)
+    signed_order = client.create_market_order(token_id=token_id, side=side, amount=amount_usd, order_type="FOK")
+    result = client.post_order(signed_order)
+    if not result.ok:
+        # RejectedOrder — surface it as an exception so _maybe_open's existing
+        # try/except (order_submit_failed + ghost-fill check) handles it the
+        # same way it handles a network/transport failure.
+        raise PolymarketError(f"order rejected: {result.code} {result.message}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -448,23 +454,22 @@ class LiveTrader:
         which after a restart is only rebuilt from the capped `recent_closed`
         tail (last 25) in the state file, so this understates true P&L once
         more than 25 trades have closed across restarts. It's the best
-        available estimate without polling the real USDC balance on every
+        available estimate without polling the real pUSD balance on every
         --v3 sizing decision (this bot already flags pnl_usd elsewhere as an
         accounting estimate, not a confirmed on-chain settlement — same
         caveat applies here, just now feeding into position sizing too)."""
         return self._reference_bankroll + self.stats()["realized_pnl"]
 
-    def _fetch_usdc_balance(self) -> float:
-        resp = self.client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
-        raw = resp.get("balance")
-        return int(raw or 0) / 10**6
+    def _fetch_pusd_balance(self) -> float:
+        resp = self.client.get_balance_allowance(asset_type="COLLATERAL")
+        return int(resp.balance or 0) / 10**6
 
     def _verify_no_ghost_fill(self, balance_before: float, context: str) -> None:
         """Called only when submit_live_market_order raised an exception —
         i.e. we don't know whether the order actually reached the exchange.
         A network exception on the API call does NOT mean the order failed;
         it can still have filled on-chain (the "ghost fill" case). Re-checks
-        the USDC balance and, if it dropped by more than a trivial amount
+        the pUSD balance and, if it dropped by more than a trivial amount
         despite the failure, treats that as evidence a real position may
         exist that this bot never recorded — halts ALL further trading
         (self.ghost_fill_halted, checked at the top of _maybe_open) and
@@ -481,7 +486,7 @@ class LiveTrader:
         with zero evidence of an actual ghost fill, would itself be an
         overreaction)."""
         try:
-            balance_after = self._fetch_usdc_balance()
+            balance_after = self._fetch_pusd_balance()
         except Exception as e:
             print(f"GHOST-FILL CHECK FAILED (could not re-verify balance): {e} — {context}", file=sys.stderr)
             return
@@ -493,7 +498,7 @@ class LiveTrader:
         self.ghost_fill_halted = True
         msg = (
             f"[Oracle-lag {self.version_label}] GHOST FILL SUSPECTED — {context}\n"
-            f"USDC balance dropped ${dropped:.2f} (${balance_before:.2f} -> ${balance_after:.2f}) despite the "
+            f"pUSD balance dropped ${dropped:.2f} (${balance_before:.2f} -> ${balance_after:.2f}) despite the "
             f"order call failing. A real position may exist that this bot has no record of.\n"
             f"Halting all further trading until manually restarted — check your Polymarket positions."
         )
@@ -583,14 +588,14 @@ class LiveTrader:
 
         if not self.dry_run:
             try:
-                real_balance = self._fetch_usdc_balance()
+                real_balance = self._fetch_pusd_balance()
             except Exception as e:
                 print(f"skip {slug} {sig.side}: balance check failed: {e}", file=sys.stderr)
                 self.traded_slugs.add(slug)
                 return None, "balance_check_failed"
             if stake_usd > real_balance:
                 print(
-                    f"skip {slug} {sig.side}: stake ${stake_usd:.2f} exceeds real USDC balance ${real_balance:.2f}",
+                    f"skip {slug} {sig.side}: stake ${stake_usd:.2f} exceeds real pUSD balance ${real_balance:.2f}",
                     file=sys.stderr,
                 )
                 self.traded_slugs.add(slug)
@@ -633,8 +638,10 @@ class LiveTrader:
             edge_at_entry=sig.edge,
             signal_probability=sig.probability,
             kelly_fraction=sig.kelly_fraction,
-            order_id=result.get("orderID") if isinstance(result, dict) else None,
-            order_result=result if isinstance(result, dict) else ({"dry_run": True} if self.dry_run else None),
+            order_id=result.order_id if result is not None else None,
+            order_result=result.model_dump(mode="json")
+            if result is not None
+            else ({"dry_run": True} if self.dry_run else None),
         )
         self.open_positions[slug] = pos
         self.traded_slugs.add(slug)
@@ -796,9 +803,8 @@ async def run(args) -> int:
     return value into the actual process exit."""
     limits = order_executor.RiskLimits(max_order_usd=args.max_stake_usd)
     client = order_executor.build_client(args)
-    address = client.get_address()
 
-    ready = run_preflight_gate(client, address, args.rpc_url, args.chain_id)
+    ready = run_preflight_gate(client, args.rpc_url)
     if not ready:
         print(
             "\nPreflight NOT READY — refusing to start live trading. "
@@ -977,17 +983,18 @@ def main():
         "--clob-max-consecutive-failures",
         type=int,
         default=3,
-        help="Halt new trades after this many consecutive CLOB health-check (get_ok()) failures immediately "
+        help="Halt new trades after this many consecutive CLOB health-check failures immediately "
         "before an order submission; auto-resumes once a check succeeds again (default: 3)",
     )
 
-    parser.add_argument("--host", default=order_executor.DEFAULT_HOST)
-    parser.add_argument("--chain-id", type=int, default=order_executor.DEFAULT_CHAIN_ID)
     parser.add_argument("--rpc-url", default=preflight.DEFAULT_RPC_URL)
     parser.add_argument("--private-key-env", default="POLYMARKET_PRIVATE_KEY")
     parser.add_argument("--keystore", default=None)
-    parser.add_argument("--signature-type", type=int, default=0, choices=[0, 1, 2])
-    parser.add_argument("--funder", default=os.environ.get("POLYMARKET_FUNDER") or None)
+    parser.add_argument(
+        "--wallet",
+        default=os.environ.get("POLYMARKET_WALLET") or None,
+        help="Address to act for (default: your signer's Deposit Wallet, auto-derived)",
+    )
 
     parser.add_argument("--telegram-token", default=None)
     parser.add_argument("--telegram-chat-id", default=None)
@@ -1008,9 +1015,6 @@ def main():
         help="Log intended orders but never call create_market_order/post_order — preflight gate still applies",
     )
     args = parser.parse_args()
-
-    if args.signature_type in (1, 2) and not args.funder:
-        parser.error("--funder is required when --signature-type is 1 or 2")
 
     pidfile.claim_or_exit(Path(args.pid_file))
     marker_path = Path(args.autorestart_marker)

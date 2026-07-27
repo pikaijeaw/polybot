@@ -17,8 +17,8 @@ eth-keyfile==0.8.1
 eth-keys==0.7.0
 eth-rlp==2.2.0
 eth-typing==6.0.0
-eth-utils==6.0.0
-eth_abi==6.0.0b1
+eth-utils==5.3.1
+eth_abi==5.2.0
 Flask==3.1.3
 frozenlist==1.8.0
 h11==0.16.0
@@ -35,14 +35,15 @@ Jinja2==3.1.6
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
+msgpack==1.2.1
 multidict==6.7.1
 packaging==26.2
 parsimonious==0.10.0
 pluggy==1.6.0
 poly_eip712_structs==0.0.1
+polymarket-client==0.2.0
 propcache==0.5.2
 py_builder_signing_sdk==0.0.2
-py_clob_client==0.34.6
 py_order_utils==0.3.2
 pycryptodome==3.23.0
 pydantic==2.13.4

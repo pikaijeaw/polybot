@@ -113,6 +113,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 import dashboard as dash  # reuse LivePrice / WalletWatcher / load_paper_state — no duplicated logic
 import gabagool_paper_trader as gaba_bot  # reuse its DEFAULT_STATE_PATH/DEFAULT_TRADES_LOG_PATH/DEFAULT_PID_PATH
+from polymarket import SecureClient
 
 import gabagool_strategy
 import oracle_lag_strategy_v2 as strategy_v2
@@ -157,9 +158,11 @@ ORACLE_V3_PERF_LOG_DIR = SCRIPT_DIR / "perf_logs_v3"
 
 # "live" (v1) uses live_trader.py's own --state-file/--trades-log/--pid-file
 # defaults directly (mirrored here, not imported, since live_trader.py is
-# only ever spawned as a subprocess — never imported as a module — to keep
-# this dashboard process from needing py_clob_client's full import graph
-# just to know a filename). "live_v2"/"live_v3" need the same explicit
+# only ever spawned as a subprocess — never imported as a module — this
+# dashboard already imports polymarket-client directly for its own
+# preflight endpoint, but there's no reason to also import live_trader.py's
+# full asyncio bot-loop machinery just to know a filename). "live_v2"/
+# "live_v3" need the same explicit
 # override treatment as "oracle_v2"/"oracle_v3" above and for the identical
 # reason: live_trader.py's own defaults for all five flags don't vary with
 # --v2/--v3, so leaving any of them out would silently collide with "live".
@@ -526,13 +529,10 @@ ARGS_BUILDERS = {
 
 def _preflight_args() -> SimpleNamespace:
     return SimpleNamespace(
-        host=order_executor.DEFAULT_HOST,
-        chain_id=order_executor.DEFAULT_CHAIN_ID,
         rpc_url=preflight.DEFAULT_RPC_URL,
         private_key_env="POLYMARKET_PRIVATE_KEY",
         keystore=None,
-        signature_type=0,
-        funder=os.environ.get("POLYMARKET_FUNDER") or None,
+        wallet=os.environ.get("POLYMARKET_WALLET") or None,
         min_gas_pol=0.05,
     )
 
@@ -545,7 +545,8 @@ def _run_preflight_uncached() -> tuple:
     """Read-only preflight check. Guards the "no key configured" case itself
     rather than letting order_executor.load_private_key's sys.exit(1) tear
     down the request thread — that call is fine from a CLI's main(), not
-    from inside a Flask handler."""
+    from inside a Flask handler. Also guards SecureClient.create() raising
+    (Level 1 auth failure) the same way, for the same reason."""
     pf_args = _preflight_args()
     if not os.environ.get(pf_args.private_key_env) and not pf_args.keystore:
         return False, [
@@ -557,14 +558,9 @@ def _run_preflight_uncached() -> tuple:
             }
         ]
 
-    from py_clob_client.client import ClobClient
-    from py_clob_client.config import get_contract_config
     from web3 import Web3
 
     private_key = order_executor.load_private_key(pf_args)
-    from eth_account import Account
-
-    address = Account.from_key(private_key).address
 
     w3 = Web3(Web3.HTTPProvider(pf_args.rpc_url, request_kwargs={"timeout": 10}))
     if not w3.is_connected():
@@ -572,15 +568,16 @@ def _run_preflight_uncached() -> tuple:
             {"section": "CLOB", "name": "rpc", "status": "FAIL", "detail": f"could not connect to {pf_args.rpc_url}"}
         ]
 
-    collateral_address = get_contract_config(pf_args.chain_id).collateral
-    client = ClobClient(
-        host=pf_args.host,
-        chain_id=pf_args.chain_id,
-        key=private_key,
-        signature_type=pf_args.signature_type,
-        funder=pf_args.funder,
-    )
-    results = preflight.run_all_checks(address, w3, collateral_address, client, pf_args.min_gas_pol)
+    try:
+        client = SecureClient.create(private_key=private_key, wallet=pf_args.wallet)
+    except Exception as e:
+        return False, [{"section": "CLOB", "name": "Level 1: private-key auth", "status": "FAIL", "detail": str(e)}]
+
+    try:
+        results = preflight.run_all_checks(client, w3, pf_args.min_gas_pol)
+    finally:
+        client.close()
+
     ready = not any(r.status == "FAIL" for r in results)
     # Redact the derived API key before this ever leaves the process — this
     # endpoint is meant for localhost only, but there's no reason to put a

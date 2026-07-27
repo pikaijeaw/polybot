@@ -4,28 +4,51 @@ Preflight check for Polymarket trading: wallet, CLOB auth, and approved
 wallet (allowance) checks — read-only, no orders placed and no transactions
 sent. Run this before pointing order_executor.py at real funds.
 
+Migration note: this used to read a raw EOA's on-chain USDC.e balance and
+authenticate a py_clob_client ClobClient directly. Both changed together —
+py_clob_client is archived ("no longer functional" per its own README), and
+Polymarket's account model has moved to pUSD (wrapped from USDC/USDC.e via
+the "Collateral Onramp") held in a Deposit Wallet — a smart-contract wallet
+deterministically derived from your EOA, not the EOA itself. This script
+now authenticates via polymarket-client's SecureClient (which derives that
+Deposit Wallet address automatically) and reports on TWO addresses: your
+EOA (client.signer — still relevant for POL/gas and any on-chain tx you'd
+submit yourself) and your Deposit Wallet (client.wallet — where pUSD
+collateral actually lives and what the CLOB trades against).
+
 Three sections:
 
-    WALLET   On-chain (via public Polygon RPC): does the address derived
-             from your key/keystore actually hold POL (gas) and USDC.e
-             (the collateral Polymarket trades against)?
+    WALLET   On-chain (via public Polygon RPC): does your EOA hold POL
+             (gas), and does your Deposit Wallet hold pUSD (the collateral
+             Polymarket trades against)? The pUSD check here is an
+             independent on-chain cross-check of the CLOB-reported balance
+             in APPROVED WALLET below, same "don't trust one source"
+             philosophy as before.
 
     CLOB     Can we reach clob.polymarket.com, and does auth work all the
              way up the stack: Level 0 (public), Level 1 (private-key
-             signature), Level 2 (derived API key/secret/passphrase)? Also
-             checks local/server clock skew (large skew breaks L2 auth
-             signatures) and whether the account is flagged closed-only
-             (Polymarket restricting you to closing positions, not opening
-             new ones).
+             signature — proven by SecureClient.create() succeeding at
+             all), Level 2 (authenticated reads working). Also checks
+             whether the account is flagged closed-only (Polymarket
+             restricting you to closing positions, not opening new ones)
+             and whether the Deposit Wallet is gasless-ready (order
+             placement won't require POL if so). There is no clock-skew
+             check anymore — the old py_clob_client exposed a raw
+             get_server_time() call for this because it built L2 auth
+             headers manually; polymarket-client doesn't expose an
+             equivalent, and its own request signing isn't something this
+             script has visibility into to second-guess.
 
     APPROVED WALLET   Polymarket's exchange contracts need an ERC20
-             allowance on your USDC (to buy) and, if you intend to sell
-             conditional tokens, an ERC1155 setApprovalForAll on those
-             (to sell). This reads the allowances Polymarket's own backend
-             currently sees for your address via get_balance_allowance —
-             more authoritative than guessing spender addresses locally,
-             since that can go stale. Usually set once by trading through
-             polymarket.com's UI, which prompts a MetaMask approval.
+             allowance on your pUSD (to buy) and, if you intend to sell
+             conditional tokens, an ERC1155 setApprovalForAll on those (to
+             sell). This reads the allowances Polymarket's own backend
+             currently sees for your Deposit Wallet via
+             get_balance_allowance — more authoritative than guessing
+             spender addresses locally. For a Deposit Wallet these are
+             normally already set (gaslessly) by Polymarket's own
+             Collateral Onramp when you convert into pUSD — nothing to run
+             yourself in the common case.
 
 This script only reports; it does not submit approvals or trades. Credential
 loading is shared with order_executor.py (same env var / keystore flags).
@@ -39,21 +62,15 @@ Usage:
 import argparse
 import json
 import sys
-import time
 from dataclasses import dataclass
 
-from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
-from py_clob_client.exceptions import PolyException
+from polymarket import PublicClient, SecureClient
 from web3 import Web3
 
-from order_executor import (
-    DEFAULT_CHAIN_ID,
-    DEFAULT_HOST,
-    load_private_key,
-)
+from order_executor import load_private_key
 
 DEFAULT_RPC_URL = "https://polygon-bor-rpc.publicnode.com"
-USDC_DECIMALS = 6
+COLLATERAL_DECIMALS = 6
 
 ERC20_ABI = [
     {
@@ -74,9 +91,9 @@ class CheckResult:
     detail: str
 
 
-def human_usdc(raw) -> str:
+def human_pusd(raw) -> str:
     try:
-        return f"{int(raw) / 10**USDC_DECIMALS:,.4f}"
+        return f"{int(raw) / 10**COLLATERAL_DECIMALS:,.4f}"
     except (TypeError, ValueError):
         return str(raw)
 
@@ -86,41 +103,48 @@ def human_usdc(raw) -> str:
 # ---------------------------------------------------------------------------
 
 
-def wallet_checks(address: str, w3: Web3, collateral_address: str, min_gas_pol: float) -> list:
+def wallet_checks(
+    eoa_address: str, deposit_wallet_address: str, w3: Web3, collateral_address: str, min_gas_pol: float
+) -> list:
     results = []
 
     try:
-        native_wei = w3.eth.get_balance(Web3.to_checksum_address(address))
+        native_wei = w3.eth.get_balance(Web3.to_checksum_address(eoa_address))
         native_pol = native_wei / 10**18
         if native_pol >= min_gas_pol:
             status, detail = "PASS", f"{native_pol:.4f} POL"
         elif native_pol > 0:
             status, detail = (
                 "WARN",
-                f"{native_pol:.6f} POL — below --min-gas-pol {min_gas_pol}; fine if you never submit your own on-chain txs (order placement itself is gasless), but you'll need some to submit an approval tx yourself",
+                f"{native_pol:.6f} POL — below --min-gas-pol {min_gas_pol}; fine if you never submit your own on-chain txs (order placement itself is gasless once the Deposit Wallet is set up), but you'll need some to submit a transaction yourself",
             )
         else:
-            status, detail = "WARN", "0 POL — can't submit any on-chain tx yourself (e.g. approvals) from this wallet"
-        results.append(CheckResult("WALLET", "POL (gas) balance", status, detail))
+            status, detail = (
+                "WARN",
+                "0 POL — can't submit any on-chain tx yourself from this EOA (order placement itself is still gasless)",
+            )
+        results.append(CheckResult("WALLET", "POL (gas) balance (EOA)", status, detail))
     except Exception as e:
-        results.append(CheckResult("WALLET", "POL (gas) balance", "FAIL", f"RPC error: {e}"))
+        results.append(CheckResult("WALLET", "POL (gas) balance (EOA)", "FAIL", f"RPC error: {e}"))
 
     try:
-        usdc = w3.eth.contract(address=Web3.to_checksum_address(collateral_address), abi=ERC20_ABI)
-        raw = usdc.functions.balanceOf(Web3.to_checksum_address(address)).call()
+        pusd = w3.eth.contract(address=Web3.to_checksum_address(collateral_address), abi=ERC20_ABI)
+        raw = pusd.functions.balanceOf(Web3.to_checksum_address(deposit_wallet_address)).call()
         if raw > 0:
-            results.append(CheckResult("WALLET", "USDC.e balance", "PASS", f"{human_usdc(raw)} USDC"))
+            results.append(
+                CheckResult("WALLET", "pUSD balance (Deposit Wallet, on-chain)", "PASS", f"{human_pusd(raw)} pUSD")
+            )
         else:
             results.append(
                 CheckResult(
                     "WALLET",
-                    "USDC.e balance",
+                    "pUSD balance (Deposit Wallet, on-chain)",
                     "FAIL",
-                    "0 USDC — nothing to trade with. Deposit USDC.e on Polygon to this address.",
+                    "0 pUSD — nothing to trade with. Convert USDC/USDC.e into pUSD via Polymarket's deposit flow.",
                 )
             )
     except Exception as e:
-        results.append(CheckResult("WALLET", "USDC.e balance", "FAIL", f"RPC error: {e}"))
+        results.append(CheckResult("WALLET", "pUSD balance (Deposit Wallet, on-chain)", "FAIL", f"RPC error: {e}"))
 
     return results
 
@@ -130,79 +154,58 @@ def wallet_checks(address: str, w3: Web3, collateral_address: str, min_gas_pol: 
 # ---------------------------------------------------------------------------
 
 
-def clob_connectivity_checks(client) -> list:
-    results = []
-
+def clob_reachability_check(environment) -> list:
     try:
-        ok = client.get_ok()
-        results.append(CheckResult("CLOB", "Level 0: reachable", "PASS", str(ok)))
+        with PublicClient(environment=environment) as public_client:
+            public_client.list_markets(page_size=1).first_page()
+        return [CheckResult("CLOB", "Level 0: reachable", "PASS", "OK")]
     except Exception as e:
-        results.append(CheckResult("CLOB", "Level 0: reachable", "FAIL", str(e)))
-        return results  # nothing downstream will work either
+        return [CheckResult("CLOB", "Level 0: reachable", "FAIL", str(e))]
+
+
+def clob_auth_checks(client: SecureClient) -> list:
+    """Level 1 (private-key auth) is proven implicitly by having a
+    constructed, credentialed SecureClient at all — SecureClient.create()
+    raises if credential derivation/validation fails, so by the time this
+    is called that step has already succeeded. Level 2 (API key actually
+    authorizing requests) still needs its own explicit check, since a
+    derived-but-invalid key could still construct successfully."""
+    results = [CheckResult("CLOB", "Level 1: private-key auth", "PASS", f"api_key={client.credentials.key}")]
 
     try:
-        server_time = int(client.get_server_time())
-        skew = abs(server_time - int(time.time()))
-        if skew <= 10:
-            results.append(CheckResult("CLOB", "Clock skew", "PASS", f"{skew}s"))
-        elif skew <= 60:
-            results.append(
-                CheckResult(
-                    "CLOB",
-                    "Clock skew",
-                    "WARN",
-                    f"{skew}s — L2 auth signatures are timestamp-sensitive, keep this small",
-                )
-            )
-        else:
-            results.append(
-                CheckResult("CLOB", "Clock skew", "FAIL", f"{skew}s — likely to break L2 auth; fix your system clock")
-            )
-    except Exception as e:
-        results.append(CheckResult("CLOB", "Clock skew", "WARN", f"couldn't check: {e}"))
-
-    return results
-
-
-def clob_auth_checks(client) -> list:
-    results = []
-
-    try:
-        creds = client.create_or_derive_api_creds()
-        if creds is None:
-            raise Exception("no creds returned")
-        client.set_api_creds(creds)
-        results.append(CheckResult("CLOB", "Level 1: private-key auth", "PASS", f"api_key={creds.api_key}"))
-    except Exception as e:
-        results.append(CheckResult("CLOB", "Level 1: private-key auth", "FAIL", str(e)))
-        return results  # Level 2 needs Level 1 to have succeeded
-
-    try:
-        orders = client.get_orders()
+        orders = list(client.list_open_orders().iter_items())
         results.append(CheckResult("CLOB", "Level 2: API key auth", "PASS", f"{len(orders)} open order(s) visible"))
-    except PolyException as e:
-        results.append(CheckResult("CLOB", "Level 2: API key auth", "FAIL", str(e)))
     except Exception as e:
         results.append(CheckResult("CLOB", "Level 2: API key auth", "FAIL", str(e)))
 
     try:
-        closed_only = client.get_closed_only_mode()
-        is_closed_only = (
-            bool(closed_only) if isinstance(closed_only, bool) else bool(closed_only.get("closed_only", closed_only))
-        )
+        is_closed_only = client.get_closed_only_mode()
         if is_closed_only:
             results.append(
-                CheckResult(
-                    "CLOB",
-                    "Account restriction",
-                    "FAIL",
-                    f"account is CLOSED-ONLY (can't open new positions): {closed_only}",
-                )
+                CheckResult("CLOB", "Account restriction", "FAIL", "account is CLOSED-ONLY (can't open new positions)")
             )
         else:
             results.append(CheckResult("CLOB", "Account restriction", "PASS", "not restricted to closed-only"))
     except Exception as e:
         results.append(CheckResult("CLOB", "Account restriction", "WARN", f"couldn't check: {e}"))
+
+    try:
+        gasless_ready = client.is_gasless_ready()
+        if gasless_ready:
+            results.append(
+                CheckResult("CLOB", "Gasless Deposit Wallet", "PASS", "ready — order placement won't need POL")
+            )
+        else:
+            results.append(
+                CheckResult(
+                    "CLOB",
+                    "Gasless Deposit Wallet",
+                    "WARN",
+                    "not ready yet — call client.setup_gasless_wallet() once, or place an order through polymarket.com's UI first",
+                )
+            )
+    except Exception as e:
+        results.append(CheckResult("CLOB", "Gasless Deposit Wallet", "WARN", f"couldn't check: {e}"))
 
     return results
 
@@ -212,25 +215,26 @@ def clob_auth_checks(client) -> list:
 # ---------------------------------------------------------------------------
 
 
-def approval_checks(client, token_id: str | None) -> list:
+def approval_checks(client: SecureClient, token_id: str | None) -> list:
     results = []
 
     try:
-        collateral = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
-        balance = collateral.get("balance")
-        allowances = collateral.get("allowances", {})
+        collateral = client.get_balance_allowance(asset_type="COLLATERAL")
+        allowances = collateral.allowances or {}
 
-        results.append(CheckResult("APPROVED WALLET", "USDC balance (per CLOB)", "PASS", f"{human_usdc(balance)} USDC"))
+        results.append(
+            CheckResult("APPROVED WALLET", "pUSD balance (per CLOB)", "PASS", f"{human_pusd(collateral.balance)} pUSD")
+        )
 
         if not allowances:
-            results.append(CheckResult("APPROVED WALLET", "USDC allowance", "WARN", "no spender allowances reported"))
+            results.append(CheckResult("APPROVED WALLET", "pUSD allowance", "WARN", "no spender allowances reported"))
         else:
             unapproved = [addr for addr, amt in allowances.items() if int(amt or 0) == 0]
             if not unapproved:
                 results.append(
                     CheckResult(
                         "APPROVED WALLET",
-                        "USDC allowance",
+                        "pUSD allowance",
                         "PASS",
                         f"approved for all {len(allowances)} exchange spender(s)",
                     )
@@ -239,33 +243,30 @@ def approval_checks(client, token_id: str | None) -> list:
                 results.append(
                     CheckResult(
                         "APPROVED WALLET",
-                        "USDC allowance",
+                        "pUSD allowance",
                         "FAIL",
                         f"{len(unapproved)}/{len(allowances)} spender(s) NOT approved: {unapproved}. "
-                        f"Buy orders routed through an unapproved spender will fail. "
-                        f"Fix by trading once through polymarket.com's UI (triggers the MetaMask approval), "
-                        f"or submit the ERC20 approve() tx yourself.",
+                        f"Buy orders routed through an unapproved spender will fail. For a Deposit Wallet this is "
+                        f"normally set automatically by Polymarket's Collateral Onramp — call "
+                        f"client.setup_trading_approvals() if it wasn't, or trade once through polymarket.com's UI.",
                     )
                 )
             for addr, amt in allowances.items():
                 status = "PASS" if int(amt or 0) > 0 else "FAIL"
-                results.append(CheckResult("APPROVED WALLET", f"  spender {addr}", status, human_usdc(amt)))
+                results.append(CheckResult("APPROVED WALLET", f"  spender {addr}", status, human_pusd(amt)))
     except Exception as e:
-        results.append(CheckResult("APPROVED WALLET", "USDC allowance", "FAIL", f"couldn't fetch: {e}"))
+        results.append(CheckResult("APPROVED WALLET", "pUSD allowance", "FAIL", f"couldn't fetch: {e}"))
 
     if token_id:
         try:
-            conditional = client.get_balance_allowance(
-                BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token_id)
-            )
-            balance = conditional.get("balance")
-            allowances = conditional.get("allowances", {})
+            conditional = client.get_balance_allowance(asset_type="CONDITIONAL", token_id=token_id)
+            allowances = conditional.allowances or {}
             results.append(
                 CheckResult(
                     "APPROVED WALLET",
                     f"conditional token {token_id[:12]}... balance",
                     "PASS",
-                    f"{human_usdc(balance)} shares",
+                    f"{human_pusd(conditional.balance)} shares",
                 )
             )
             unapproved = [addr for addr, amt in allowances.items() if int(amt or 0) == 0]
@@ -295,25 +296,20 @@ def approval_checks(client, token_id: str | None) -> list:
     return results
 
 
-def run_all_checks(
-    address: str, w3: Web3, collateral_address: str, client, min_gas_pol: float = 0.05, token_id: str | None = None
-) -> list:
+def run_all_checks(client: SecureClient, w3: Web3, min_gas_pol: float = 0.05, token_id: str | None = None) -> list:
     """Runs every section (wallet/CLOB/approved-wallet) in the same order as
     main() below, and is the single reusable entry point for callers that
     need a pass/fail verdict rather than a printed report — e.g.
     live_trader.py's mandatory preflight gate and web_dashboard.py's
     Live-mode status display both call this instead of re-deriving the
-    check sequence themselves."""
-    results = wallet_checks(address, w3, collateral_address, min_gas_pol)
-
-    conn_results = clob_connectivity_checks(client)
-    results += conn_results
-    if not any(r.status == "FAIL" for r in conn_results):
-        auth_results = clob_auth_checks(client)
-        results += auth_results
-        if client.creds is not None:
-            results += approval_checks(client, token_id)
-
+    check sequence themselves. Takes an already-constructed, authenticated
+    SecureClient (Level 1 auth already proven by that point) rather than a
+    raw address/key, since client construction itself IS the Level 1 check
+    now — see clob_auth_checks' docstring."""
+    results = wallet_checks(client.signer, client.wallet, w3, client.environment.collateral_token, min_gas_pol)
+    results += clob_reachability_check(client.environment)
+    results += clob_auth_checks(client)
+    results += approval_checks(client, token_id)
     return results
 
 
@@ -347,8 +343,6 @@ def print_report(results: list, address: str):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--chain-id", type=int, default=DEFAULT_CHAIN_ID)
     parser.add_argument(
         "--rpc-url",
         default=DEFAULT_RPC_URL,
@@ -356,8 +350,9 @@ def main():
     )
     parser.add_argument("--private-key-env", default="POLYMARKET_PRIVATE_KEY")
     parser.add_argument("--keystore", default=None)
-    parser.add_argument("--signature-type", type=int, default=0, choices=[0, 1, 2])
-    parser.add_argument("--funder", default=None)
+    parser.add_argument(
+        "--wallet", default=None, help="Address to act for (default: your signer's Deposit Wallet, auto-derived)"
+    )
     parser.add_argument(
         "--min-gas-pol", type=float, default=0.05, help="POL balance below which gas is flagged as low (default: 0.05)"
     )
@@ -367,42 +362,31 @@ def main():
     parser.add_argument("--json", action="store_true", help="Print results as JSON instead of a text report")
     args = parser.parse_args()
 
-    if args.signature_type in (1, 2) and not args.funder:
-        parser.error("--funder is required when --signature-type is 1 or 2")
-
     # Loaded exactly once — with --keystore this prompts for a password, and
     # we don't want to ask twice.
     private_key = load_private_key(args)
-    from eth_account import Account
-
-    address = Account.from_key(private_key).address
 
     w3 = Web3(Web3.HTTPProvider(args.rpc_url, request_kwargs={"timeout": 10}))
     if not w3.is_connected():
         print(f"Could not connect to RPC {args.rpc_url}", file=sys.stderr)
         sys.exit(1)
 
-    from py_clob_client.config import get_contract_config
+    try:
+        client = SecureClient.create(private_key=private_key, wallet=args.wallet)
+    except Exception as e:
+        print(f"Level 1 auth failed — could not construct an authenticated client: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    collateral_address = get_contract_config(args.chain_id).collateral
-
-    from py_clob_client.client import ClobClient
-
-    client = ClobClient(
-        host=args.host,
-        chain_id=args.chain_id,
-        key=private_key,
-        signature_type=args.signature_type,
-        funder=args.funder,
-    )
-
-    results = run_all_checks(address, w3, collateral_address, client, args.min_gas_pol, args.token_id)
+    try:
+        results = run_all_checks(client, w3, args.min_gas_pol, args.token_id)
+    finally:
+        client.close()
 
     if args.json:
         print(json.dumps([r.__dict__ for r in results], indent=2))
         ready = not any(r.status == "FAIL" for r in results)
     else:
-        ready = print_report(results, address)
+        ready = print_report(results, client.wallet)
 
     sys.exit(0 if ready else 1)
 

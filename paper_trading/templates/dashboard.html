@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Oracle-Lag Scalper — Paper Trading Monitor</title>
+<title>PolyBot — Paper Trading Monitor</title>
 <style>
   :root {
     --bg: #0b0e14;
@@ -14,6 +14,7 @@
     --cyan: #4fd6e8;
     --amber: #e8b84f;
     --magenta: #d97fe0;
+    --gold: #d4af37;
     --green: #4fe89b;
     --red: #e85f6b;
     --mono: "SFMono-Regular", Consolas, Menlo, monospace;
@@ -35,245 +36,282 @@
     flex-wrap: wrap;
     gap: 8px;
   }
-  h1 {
-    font-size: 17px;
-    font-weight: 600;
-    margin: 0;
-    letter-spacing: 0.2px;
-  }
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--text-dim);
-    transition: background 0.3s;
-  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
+  .status { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); transition: background 0.3s; }
   .dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .dot.stale { background: var(--red); box-shadow: 0 0 6px var(--red); }
 
-  .grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 16px;
-  }
-  .grid > .full { grid-column: 1 / -1; }
-  @media (max-width: 860px) {
-    .grid { grid-template-columns: 1fr; }
-  }
+  .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 860px) { .top-grid { grid-template-columns: 1fr; } }
 
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: 10px;
-    padding: 16px 18px;
-  }
-  .panel h2 {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-    font-weight: 700;
-    margin: 0 0 12px 0;
-    color: var(--text-dim);
-  }
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 16px 18px; }
+  .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; margin: 0 0 12px 0; color: var(--text-dim); }
   .panel.price h2 { color: var(--cyan); }
-  .panel.orders h2 { color: var(--amber); }
   .panel.wallet h2 { color: var(--magenta); }
 
-  .big-price {
-    font-family: var(--mono);
-    font-size: 34px;
-    font-weight: 600;
-    color: var(--cyan);
-    line-height: 1;
-    margin-bottom: 10px;
-  }
+  .big-price { font-family: var(--mono); font-size: 34px; font-weight: 600; color: var(--cyan); line-height: 1; margin-bottom: 4px; }
   .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
   .row .label { color: var(--text-dim); }
   .row .value { font-family: var(--mono); }
 
-  .edge-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: #171c28; }
-  .edge-row .side { font-weight: 600; font-size: 13px; }
-  .edge-row .metrics { font-family: var(--mono); font-size: 13px; }
+  .edge-row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding: 5px 9px; border-radius: 6px; background: #171c28; }
+  .edge-row .side { font-weight: 600; font-size: 12.5px; }
+  .edge-row .metrics { font-family: var(--mono); font-size: 12.5px; }
   .pos { color: var(--green); }
   .neg { color: var(--text-dim); }
+  .neg.real { color: var(--red); }
 
   .dim { color: var(--text-dim); }
   .empty { color: var(--text-dim); font-size: 13px; padding: 8px 0; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { text-align: left; padding: 6px 8px; white-space: nowrap; }
-  th { color: var(--text-dim); font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.6px; border-bottom: 1px solid var(--panel-border); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 7px; white-space: nowrap; }
+  th { color: var(--text-dim); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; border-bottom: 1px solid var(--panel-border); }
   td { font-family: var(--mono); border-bottom: 1px solid #1a1f2b; }
   tr:last-child td { border-bottom: none; }
-  .badge { padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; }
+  .badge { padding: 2px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; }
   .badge.OPEN { background: #3a3416; color: var(--amber); }
   .badge.WON  { background: #163a2a; color: var(--green); }
   .badge.LOST { background: #3a1a1e; color: var(--red); }
+  .table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto; }
 
-  .table-wrap { overflow-x: auto; }
-
-  .stat-strip { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
-  .stat { font-size: 12px; }
+  .stat-strip { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0; padding: 8px 0; border-top: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border); }
+  .stat { font-size: 11.5px; }
   .stat .label { color: var(--text-dim); display: block; }
-  .stat .value { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  .stat .value { font-family: var(--mono); font-size: 14px; font-weight: 600; }
 
   footer { margin-top: 18px; font-size: 11px; color: var(--text-dim); text-align: center; }
 
-  .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-  .panel-header h2 { margin: 0; }
+  .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; flex-wrap: wrap; gap: 6px; }
+  h1.section-title { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin: 22px 0 10px 0; }
   .btn {
-    font-family: var(--sans);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--bg);
-    background: var(--amber);
-    border: none;
-    border-radius: 6px;
-    padding: 7px 13px;
-    cursor: pointer;
-    text-decoration: none;
-    transition: opacity 0.15s;
+    font-family: var(--sans); font-size: 11.5px; font-weight: 600; color: var(--bg); background: var(--amber);
+    border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; text-decoration: none; transition: opacity 0.15s;
   }
   .btn:hover { opacity: 0.85; }
   .btn:active { opacity: 0.7; }
   .btn.disabled { opacity: 0.4; pointer-events: none; }
   .btn.danger { background: var(--red); }
   .btn.stop { background: var(--panel-border); color: var(--text); }
+  .btn.gaba { background: var(--gold); }
+  .btn.v2 { background: var(--magenta); }
+  .btn.v3 { background: var(--green); }
 
-  .bot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 4px; }
-  @media (max-width: 860px) { .bot-grid { grid-template-columns: 1fr; } }
-  .bot-panel { background: #171c28; border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px; }
+  .strategies-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+  .bot-panel { background: #171c28; border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; }
   .bot-panel.live-panel { border-color: #4a2530; }
+  .bot-panel.gaba-panel { border-color: #4a3f1f; }
+  .bot-panel.paperv2-panel { border-color: #4a2a4a; }
+  .bot-panel.paperv3-panel { border-color: #1f4a3a; }
   .bot-panel h3 { margin: 0 0 10px 0; font-size: 13px; letter-spacing: 0.4px; }
-  .bot-panel.paper-panel h3 { color: var(--amber); }
+  .bot-panel.paper-panel h3 { color: var(--cyan); }
+  .bot-panel.paperv2-panel h3 { color: var(--magenta); }
+  .bot-panel.paperv3-panel h3 { color: var(--green); }
+  .bot-panel.gaba-panel h3 { color: var(--gold); }
   .bot-panel.live-panel h3 { color: var(--red); }
-  .bot-status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; }
+  .bot-panel h3 .sub { color: var(--text-dim); font-weight: 400; font-size: 10.5px; display: block; margin-top: 2px; }
+  .bot-status-line { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 8px; }
   .bot-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
   .bot-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .bot-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-bottom: 10px; }
-  .bot-fields label { display: flex; flex-direction: column; font-size: 10.5px; color: var(--text-dim); gap: 3px; }
+  .bot-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; margin-bottom: 10px; }
+  .bot-fields label { display: flex; flex-direction: column; font-size: 10px; color: var(--text-dim); gap: 3px; }
   .bot-fields input {
     background: var(--bg); border: 1px solid var(--panel-border); color: var(--text);
-    border-radius: 5px; padding: 5px 6px; font-family: var(--mono); font-size: 12px; width: 100%;
+    border-radius: 5px; padding: 5px 6px; font-family: var(--mono); font-size: 11.5px; width: 100%;
   }
-  .bot-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .preflight-badge { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.3px; }
+  .bot-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .preflight-badge { font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 4px; letter-spacing: 0.3px; }
   .preflight-badge.ready { background: #163a2a; color: var(--green); }
   .preflight-badge.not-ready { background: #3a1a1e; color: var(--red); }
   .preflight-badge.checking { background: #232838; color: var(--text-dim); }
-  .preflight-fails { margin-top: 8px; font-size: 11px; color: var(--red); max-height: 90px; overflow-y: auto; }
-  .confirm-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
-  .confirm-row input { flex: 1; }
-  .bot-msg { font-size: 11.5px; margin-top: 8px; color: var(--text-dim); }
+  .preflight-fails { margin-top: 6px; font-size: 10.5px; color: var(--red); max-height: 80px; overflow-y: auto; }
+  .confirm-row { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
+  .confirm-row input { flex: 1; background: var(--bg); border: 1px solid var(--panel-border); color: var(--text); border-radius: 5px; padding: 5px 6px; font-family: var(--mono); font-size: 11.5px; }
+  .bot-msg { font-size: 11px; margin-bottom: 6px; color: var(--text-dim); min-height: 14px; }
   .bot-msg.err { color: var(--red); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Oracle-Lag Scalper — Paper Trading Monitor</h1>
+  <h1>PolyBot — Paper Trading Monitor</h1>
   <div class="status">
     <span class="dot" id="status-dot"></span>
     <span id="status-text">connecting…</span>
   </div>
 </header>
 
-<div class="grid">
+<div class="top-grid">
   <div class="panel price">
-    <h2>Price</h2>
+    <h2>BTC Price</h2>
     <div id="price-content"><div class="empty">Loading…</div></div>
   </div>
-
   <div class="panel wallet">
-    <h2>Wallet</h2>
+    <h2>Real Wallet (read-only)</h2>
     <div id="wallet-content"><div class="empty">Loading…</div></div>
-  </div>
-
-  <div class="panel orders full">
-    <div class="panel-header">
-      <h2>Orders</h2>
-      <a id="report-btn" class="btn" href="/api/report.csv" download title="Download full order list, win/loss, entry price and P&amp;L as CSV">Generate Report (CSV)</a>
-    </div>
-    <div id="orders-content"><div class="empty">Loading…</div></div>
-  </div>
-
-  <div class="panel full">
-    <h2>Bot Control</h2>
-    <div class="bot-grid">
-
-      <div class="bot-panel paper-panel">
-        <h3>PAPER TRADING</h3>
-        <div class="bot-status-line">
-          <span class="bot-dot" id="paper-dot"></span>
-          <span id="paper-status-text">checking…</span>
-        </div>
-        <div class="bot-fields">
-          <label>Bankroll ($)<input type="number" id="paper-bankroll" value="50" step="1"></label>
-          <label>Min edge<input type="number" id="paper-min-edge" value="0.02" step="0.01"></label>
-          <label>Max position %<input type="number" id="paper-max-pos" value="0.05" step="0.01"></label>
-          <label>Kelly multiplier<input type="number" id="paper-kelly" value="0.25" step="0.05"></label>
-          <label>Max open positions (optional)<input type="number" id="paper-max-open" placeholder="unlimited" step="1"></label>
-        </div>
-        <div class="bot-actions">
-          <button class="btn" id="paper-start-btn" onclick="startBot('paper')">Start</button>
-          <button class="btn stop" id="paper-stop-btn" onclick="stopBot('paper')">Stop</button>
-          <button class="btn danger" id="paper-reset-btn" onclick="showPaperResetConfirm()">Reset Everything</button>
-        </div>
-        <div class="confirm-row" id="paper-reset-confirm-row" style="display:none;">
-          <input type="text" id="paper-reset-confirm-input" placeholder="Type RESET to confirm">
-          <button class="btn danger" onclick="confirmPaperReset()">Confirm</button>
-          <button class="btn stop" onclick="cancelPaperResetConfirm()">Cancel</button>
-        </div>
-        <div class="bot-msg" id="paper-msg"></div>
-      </div>
-
-      <div class="bot-panel live-panel">
-        <h3>LIVE TRADING (real funds)</h3>
-        <div class="bot-status-line">
-          <span class="bot-dot" id="live-dot"></span>
-          <span id="live-status-text">checking…</span>
-          <span class="preflight-badge checking" id="preflight-badge">preflight: click Start to check</span>
-        </div>
-        <div class="bot-fields">
-          <label>Bankroll ($, sizing ref)<input type="number" id="live-bankroll" value="50" step="1"></label>
-          <label>Min edge<input type="number" id="live-min-edge" value="0.02" step="0.01"></label>
-          <label>Max position %<input type="number" id="live-max-pos" value="0.05" step="0.01"></label>
-          <label>Kelly multiplier<input type="number" id="live-kelly" value="0.25" step="0.05"></label>
-          <label>Max stake/trade ($)<input type="number" id="live-max-stake" value="2" step="0.5"></label>
-          <label>Max trades/hour<input type="number" id="live-max-hour" value="4" step="1"></label>
-          <label>Max trades/day<input type="number" id="live-max-day" value="20" step="1"></label>
-          <label>Max open positions<input type="number" id="live-max-open" value="1" step="1"></label>
-          <label>Max daily loss ($, optional)<input type="number" id="live-max-daily-loss" placeholder="disabled" step="1"></label>
-        </div>
-        <div class="bot-actions">
-          <button class="btn danger" id="live-start-btn" onclick="onClickStartLive()">Start Live</button>
-          <button class="btn stop" id="live-stop-btn" onclick="stopBot('live')">Stop</button>
-        </div>
-        <div class="confirm-row" id="live-confirm-row" style="display:none;">
-          <input type="text" id="live-confirm-input" placeholder="Type START LIVE to confirm">
-          <button class="btn danger" onclick="confirmStartLive()">Confirm</button>
-          <button class="btn stop" onclick="cancelLiveConfirm()">Cancel</button>
-        </div>
-        <div class="preflight-fails" id="preflight-fails"></div>
-        <div class="bot-msg" id="live-msg"></div>
-      </div>
-
-    </div>
-    <div class="dim" style="font-size:11px;margin-top:10px;">
-      Live mode places real orders automatically once started (no per-trade confirmation) — it is gated by the caps above and refuses to start unless preflight_check.py reports READY.
-    </div>
   </div>
 </div>
 
-<footer>Read-only monitor · polls /api/data every 1.5s · no orders are placed from this page</footer>
+<h1 class="section-title">Paper Strategies — running in parallel</h1>
+<div class="strategies-grid">
+
+  <div class="bot-panel paper-panel">
+    <h3>Oracle-Lag v1<span class="sub">5m — Binance/Chainlink lead-lag, quarter-Kelly</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="paper-dot"></span><span id="paper-status-text">checking…</span></div>
+    <div id="paper-engine"></div>
+    <div id="paper-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn" href="/api/report.csv?strategy=paper" download>CSV</a></div>
+    <div id="paper-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label>Bankroll ($)<input type="number" id="paper-bankroll" value="50" step="1"></label>
+      <label>Min edge<input type="number" id="paper-min-edge" value="0.02" step="0.01"></label>
+      <label>Max position %<input type="number" id="paper-max-pos" value="0.05" step="0.01"></label>
+      <label>Kelly multiplier<input type="number" id="paper-kelly" value="0.25" step="0.05"></label>
+      <label>Max open (optional)<input type="number" id="paper-max-open" placeholder="unlimited" step="1"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn" id="paper-start-btn" onclick="startBot('paper')">Start</button>
+      <button class="btn stop" id="paper-stop-btn" onclick="stopBot('paper')">Stop</button>
+      <button class="btn danger" id="paper-reset-btn" onclick="showResetConfirm('paper')">Reset</button>
+    </div>
+    <div class="confirm-row" id="paper-reset-confirm-row" style="display:none;">
+      <input type="text" id="paper-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('paper')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('paper')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="paper-msg"></div>
+  </div>
+
+  <div class="bot-panel paperv2-panel">
+    <h3>Oracle-Lag v2<span class="sub">5m — same engine + prob floor, safety-factor, entry window</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="oracle_v2-dot"></span><span id="oracle_v2-status-text">checking…</span></div>
+    <div id="oracle_v2-engine"></div>
+    <div id="oracle_v2-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn v2" href="/api/report.csv?strategy=oracle_v2" download>CSV</a></div>
+    <div id="oracle_v2-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label>Bankroll ($)<input type="number" id="oracle_v2-bankroll" value="50" step="1"></label>
+      <label>Min edge<input type="number" id="oracle_v2-min-edge" value="0.05" step="0.01"></label>
+      <label>Max position %<input type="number" id="oracle_v2-max-pos" value="0.05" step="0.01"></label>
+      <label>Kelly multiplier<input type="number" id="oracle_v2-kelly" value="0.25" step="0.05"></label>
+      <label>Max open (optional)<input type="number" id="oracle_v2-max-open" placeholder="unlimited" step="1"></label>
+      <label>Min prob<input type="number" id="oracle_v2-min-prob" value="0.80" step="0.01"></label>
+      <label>Safety factor<input type="number" id="oracle_v2-safety-factor" value="0.85" step="0.01"></label>
+      <label>Entry window start (s)<input type="number" id="oracle_v2-entry-start" value="240" step="10"></label>
+      <label>Entry window end (s)<input type="number" id="oracle_v2-entry-end" value="10" step="5"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn v2" id="oracle_v2-start-btn" onclick="startBot('oracle_v2')">Start</button>
+      <button class="btn stop" id="oracle_v2-stop-btn" onclick="stopBot('oracle_v2')">Stop</button>
+      <button class="btn danger" id="oracle_v2-reset-btn" onclick="showResetConfirm('oracle_v2')">Reset</button>
+    </div>
+    <div class="confirm-row" id="oracle_v2-reset-confirm-row" style="display:none;">
+      <input type="text" id="oracle_v2-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('oracle_v2')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('oracle_v2')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="oracle_v2-msg"></div>
+  </div>
+
+  <div class="bot-panel paperv3-panel">
+    <h3>Oracle-Lag v3<span class="sub">5m — v2 filters + Kelly sizing that compounds off live equity</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="oracle_v3-dot"></span><span id="oracle_v3-status-text">checking…</span></div>
+    <div id="oracle_v3-engine"></div>
+    <div id="oracle_v3-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn v3" href="/api/report.csv?strategy=oracle_v3" download>CSV</a></div>
+    <div id="oracle_v3-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label>Bankroll ($)<input type="number" id="oracle_v3-bankroll" value="50" step="1"></label>
+      <label>Min edge<input type="number" id="oracle_v3-min-edge" value="0.05" step="0.01"></label>
+      <label>Max position %<input type="number" id="oracle_v3-max-pos" value="0.05" step="0.01"></label>
+      <label>Kelly multiplier<input type="number" id="oracle_v3-kelly" value="0.25" step="0.05"></label>
+      <label>Max open (optional)<input type="number" id="oracle_v3-max-open" placeholder="unlimited" step="1"></label>
+      <label>Min prob<input type="number" id="oracle_v3-min-prob" value="0.80" step="0.01"></label>
+      <label>Safety factor<input type="number" id="oracle_v3-safety-factor" value="0.85" step="0.01"></label>
+      <label>Entry window start (s)<input type="number" id="oracle_v3-entry-start" value="240" step="10"></label>
+      <label>Entry window end (s)<input type="number" id="oracle_v3-entry-end" value="10" step="5"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn v3" id="oracle_v3-start-btn" onclick="startBot('oracle_v3')">Start</button>
+      <button class="btn stop" id="oracle_v3-stop-btn" onclick="stopBot('oracle_v3')">Stop</button>
+      <button class="btn danger" id="oracle_v3-reset-btn" onclick="showResetConfirm('oracle_v3')">Reset</button>
+    </div>
+    <div class="confirm-row" id="oracle_v3-reset-confirm-row" style="display:none;">
+      <input type="text" id="oracle_v3-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('oracle_v3')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('oracle_v3')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="oracle_v3-msg"></div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;">"Bankroll" here only sets the starting/reference value — stakes compound off actual live equity as it grows or shrinks, unlike v1/v2 which size off this number for the whole run.</div>
+  </div>
+
+  <div class="bot-panel gaba-panel">
+    <h3>Gabagool<span class="sub">15m — YES/NO order-book arbitrage, fee-aware</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="gabagool-dot"></span><span id="gabagool-status-text">checking…</span></div>
+    <div id="gabagool-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Positions</span><a class="btn gaba" href="/api/report.csv?strategy=gabagool" download>CSV</a></div>
+    <div id="gabagool-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label>Bankroll ($)<input type="number" id="gabagool-bankroll" value="1000" step="50"></label>
+      <label>Bucket/trade ($)<input type="number" id="gabagool-bucket" value="50" step="5"></label>
+      <label>Fee rate<input type="number" id="gabagool-fee" value="0.07" step="0.01"></label>
+      <label>Min margin ($/share)<input type="number" id="gabagool-margin" value="0.005" step="0.001"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn gaba" id="gabagool-start-btn" onclick="startBot('gabagool')">Start</button>
+      <button class="btn stop" id="gabagool-stop-btn" onclick="stopBot('gabagool')">Stop</button>
+      <button class="btn danger" id="gabagool-reset-btn" onclick="showResetConfirm('gabagool')">Reset</button>
+    </div>
+    <div class="confirm-row" id="gabagool-reset-confirm-row" style="display:none;">
+      <input type="text" id="gabagool-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('gabagool')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('gabagool')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="gabagool-msg"></div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;">Most poll cycles find nothing tradeable — the book has to actually cross for there to be free money after fees. Long idle stretches are expected.</div>
+  </div>
+
+</div>
+
+<h1 class="section-title">Live Trading (real funds)</h1>
+<div class="panel full">
+  <div class="bot-panel live-panel">
+    <div class="bot-status-line">
+      <span class="bot-dot" id="live-dot"></span>
+      <span id="live-status-text">checking…</span>
+      <span class="preflight-badge checking" id="preflight-badge">preflight: click Start to check</span>
+    </div>
+    <div class="bot-fields">
+      <label>Bankroll ($, sizing ref)<input type="number" id="live-bankroll" value="50" step="1"></label>
+      <label>Min edge<input type="number" id="live-min-edge" value="0.02" step="0.01"></label>
+      <label>Max position %<input type="number" id="live-max-pos" value="0.05" step="0.01"></label>
+      <label>Kelly multiplier<input type="number" id="live-kelly" value="0.25" step="0.05"></label>
+      <label>Max stake/trade ($)<input type="number" id="live-max-stake" value="2" step="0.5"></label>
+      <label>Max trades/hour<input type="number" id="live-max-hour" value="4" step="1"></label>
+      <label>Max trades/day<input type="number" id="live-max-day" value="20" step="1"></label>
+      <label>Max open positions<input type="number" id="live-max-open" value="1" step="1"></label>
+      <label>Max daily loss ($, optional)<input type="number" id="live-max-daily-loss" placeholder="disabled" step="1"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn danger" id="live-start-btn" onclick="onClickStartLive()">Start Live</button>
+      <button class="btn stop" id="live-stop-btn" onclick="stopBot('live')">Stop</button>
+    </div>
+    <div class="confirm-row" id="live-confirm-row" style="display:none;">
+      <input type="text" id="live-confirm-input" placeholder="Type START LIVE to confirm">
+      <button class="btn danger" onclick="confirmStartLive()">Confirm</button>
+      <button class="btn stop" onclick="cancelLiveConfirm()">Cancel</button>
+    </div>
+    <div class="preflight-fails" id="preflight-fails"></div>
+    <div class="bot-msg" id="live-msg"></div>
+  </div>
+  <div class="dim" style="font-size:11px;margin-top:6px;">
+    Live mode places real orders automatically once started (no per-trade confirmation) — it is gated by the caps above and refuses to start unless preflight_check.py reports READY.
+  </div>
+</div>
+
+<footer>Read-only monitor (except explicit Reset/Start/Stop actions) · polls /api/data every 1.5s</footer>
 
 <script>
 const REFRESH_MS = 1500;
@@ -283,6 +321,11 @@ function fmtMoney(x, signed) {
   const sign = signed && x > 0 ? "+" : "";
   return sign + "$" + x.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
+function fmtMoney3(x, signed) {
+  if (x === null || x === undefined) return "-";
+  const sign = signed && x > 0 ? "+" : "";
+  return sign + "$" + Number(x).toFixed(3);
+}
 function fmtPct(x, signed) {
   if (x === null || x === undefined) return "-";
   signed = signed !== false;
@@ -291,7 +334,7 @@ function fmtPct(x, signed) {
 }
 function fmtNum(x, d) {
   if (x === null || x === undefined) return "-";
-  return x.toFixed(d === undefined ? 2 : d);
+  return Number(x).toFixed(d === undefined ? 2 : d);
 }
 function ageStr(ts) {
   if (!ts) return "-";
@@ -306,66 +349,25 @@ function esc(s) {
 
 function renderPrice(data) {
   const price = data.price;
-  const engine = data.state && data.state.engine;
   let html = "";
-
   if (price.value !== null) {
     html += `<div class="big-price">$${price.value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>`;
-    html += `<div class="dim" style="font-size:11px;margin-bottom:12px;">BTC/USDT · Binance</div>`;
+    html += `<div class="dim" style="font-size:11px;">BTC/USDT · Binance</div>`;
   } else {
     html += `<div class="empty">price unavailable (${esc(price.error || "unknown error")})</div>`;
-  }
-
-  if (!engine) {
-    html += `<div class="empty">No active Polymarket window tracked yet.</div>`;
-  } else {
-    const approx = engine.anchor_is_approximate ? "~" : "";
-    html += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug || "-")}</span></div>`;
-    html += `<div class="row"><span class="label">Anchor</span><span class="value">${approx}${fmtNum(engine.anchor_price)}</span></div>`;
-    html += `<div class="row"><span class="label">Closes in</span><span class="value">${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
-    if (engine.p_up !== null && engine.p_up !== undefined) {
-      html += `<div class="row"><span class="label">Model P(Up)</span><span class="value">${fmtPct(engine.p_up, false)}</span></div>`;
-      html += `<div class="row"><span class="label">sigma/&radic;s</span><span class="value">${(engine.sigma_per_sqrt_sec || 0).toExponential(2)}</span></div>`;
-    }
-    if (engine.up_edge !== null && engine.up_edge !== undefined) {
-      const upCls = engine.up_edge > 0 ? "pos" : "neg";
-      const downCls = (engine.down_edge || 0) > 0 ? "pos" : "neg";
-      html += `<div class="edge-row"><span class="side">Up</span><span class="metrics ${upCls}">ask ${fmtNum(engine.up_ask, 3)} · edge ${fmtPct(engine.up_edge)}</span></div>`;
-      html += `<div class="edge-row"><span class="side">Down</span><span class="metrics ${downCls}">ask ${fmtNum(engine.down_ask, 3)} · edge ${fmtPct(engine.down_edge)}</span></div>`;
-    }
   }
   document.getElementById("price-content").innerHTML = html;
 }
 
 function renderWallet(data) {
-  const state = data.state;
   const wallet = data.wallet;
-  let html = `<div style="font-size:12px;font-weight:700;color:var(--text-dim);margin-bottom:6px;">PAPER WALLET</div>`;
-
-  if (state) {
-    const ret = state.starting_bankroll ? (state.equity - state.starting_bankroll) / state.starting_bankroll : null;
-    const retCls = (ret || 0) >= 0 ? "pos" : "neg";
-    const stats = state.stats || {};
-    const pnlCls = (stats.realized_pnl || 0) >= 0 ? "pos" : "neg";
-    html += `<div class="row"><span class="label">Cash</span><span class="value">${fmtMoney(state.cash)}</span></div>`;
-    html += `<div class="row"><span class="label">Equity</span><span class="value">${fmtMoney(state.equity)} <span class="${retCls}">(${fmtPct(ret)})</span></span></div>`;
-    html += `<div class="stat-strip">`;
-    html += `<div class="stat"><span class="label">Trades</span><span class="value">${stats.trades || 0}</span></div>`;
-    html += `<div class="stat"><span class="label">Win rate</span><span class="value">${fmtPct(stats.win_rate, false)}</span></div>`;
-    html += `<div class="stat"><span class="label">Realized P&amp;L</span><span class="value ${pnlCls}">${fmtMoney(stats.realized_pnl, true)}</span></div>`;
-    html += `</div>`;
-    html += `<div class="dim" style="font-size:11px;margin-top:8px;">updated ${ageStr(state.updated_at)}</div>`;
-  } else {
-    html += `<div class="empty">no data yet — is paper_trader.py running?</div>`;
-  }
-
-  html += `<div style="font-size:12px;font-weight:700;color:var(--text-dim);margin:14px 0 6px 0;">REAL WALLET (read-only)</div>`;
+  let html = "";
   if (!wallet.configured) {
     html += `<div class="empty">not configured (set POLYMARKET_PRIVATE_KEY in .env)</div>`;
   } else {
     html += `<div class="dim" style="font-size:11.5px;word-break:break-all;margin-bottom:6px;">${esc(wallet.address)}</div>`;
     if (wallet.error) {
-      html += `<div class="neg" style="font-size:12px;">error: ${esc(wallet.error)}</div>`;
+      html += `<div class="neg real" style="font-size:12px;">error: ${esc(wallet.error)}</div>`;
     } else {
       html += `<div class="row"><span class="label">POL</span><span class="value">${fmtNum(wallet.pol, 4)}</span></div>`;
       html += `<div class="row"><span class="label">USDC</span><span class="value">${fmtNum(wallet.usdc, 4)}</span></div>`;
@@ -374,53 +376,105 @@ function renderWallet(data) {
   document.getElementById("wallet-content").innerHTML = html;
 }
 
-function renderOrders(data) {
-  const state = data.state;
+// -- Oracle-lag v1/v2/v3 (identical state shape — see CLAUDE.md) ----------
+
+function renderDirectionalPanel(mode, state) {
+  const engineEl = document.getElementById(`${mode}-engine`);
+  const statsEl = document.getElementById(`${mode}-stats`);
+  const ordersEl = document.getElementById(`${mode}-orders`);
+
   if (!state) {
-    document.getElementById("orders-content").innerHTML = `<div class="empty">No paper_trader.py data yet — is it running?</div>`;
+    engineEl.innerHTML = "";
+    statsEl.innerHTML = "";
+    ordersEl.innerHTML = `<div class="empty">no data yet — start the bot</div>`;
     return;
   }
+
+  const engine = state.engine;
+  let eHtml = "";
+  if (engine) {
+    const approx = engine.anchor_is_approximate ? "~" : "";
+    eHtml += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug || "-")}</span></div>`;
+    eHtml += `<div class="row"><span class="label">Anchor / closes in</span><span class="value">${approx}${fmtNum(engine.anchor_price)} · ${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
+    if (engine.up_edge !== null && engine.up_edge !== undefined) {
+      const upCls = engine.up_edge > 0 ? "pos" : "neg";
+      const downCls = (engine.down_edge || 0) > 0 ? "pos" : "neg";
+      eHtml += `<div class="edge-row"><span class="side">Up</span><span class="metrics ${upCls}">ask ${fmtNum(engine.up_ask, 3)} · edge ${fmtPct(engine.up_edge)}</span></div>`;
+      eHtml += `<div class="edge-row"><span class="side">Down</span><span class="metrics ${downCls}">ask ${fmtNum(engine.down_ask, 3)} · edge ${fmtPct(engine.down_edge)}</span></div>`;
+    }
+  }
+  engineEl.innerHTML = eHtml;
+
+  const ret = state.starting_bankroll ? (state.equity - state.starting_bankroll) / state.starting_bankroll : null;
+  const retCls = (ret || 0) >= 0 ? "pos" : "neg real";
+  const stats = state.stats || {};
+  const pnlCls = (stats.realized_pnl || 0) >= 0 ? "pos" : "neg real";
+  statsEl.innerHTML = `
+    <div class="row"><span class="label">Equity</span><span class="value">${fmtMoney(state.equity)} <span class="${retCls}">(${fmtPct(ret)})</span></span></div>
+    <div class="stat-strip">
+      <div class="stat"><span class="label">Trades</span><span class="value">${stats.trades || 0}</span></div>
+      <div class="stat"><span class="label">Win rate</span><span class="value">${fmtPct(stats.win_rate, false)}</span></div>
+      <div class="stat"><span class="label">P&amp;L</span><span class="value ${pnlCls}">${fmtMoney(stats.realized_pnl, true)}</span></div>
+    </div>`;
+
   const open = state.open_positions || [];
   const closed = (state.recent_closed || []).slice().reverse();
-
   if (open.length === 0 && closed.length === 0) {
-    document.getElementById("orders-content").innerHTML = `<div class="empty">No trades yet.</div>`;
+    ordersEl.innerHTML = `<div class="empty">No trades yet.</div>`;
     return;
   }
-
   let rows = "";
   const now = Date.now() / 1000;
   for (const p of open) {
     const remaining = p.end_epoch - now;
-    rows += `<tr>
-      <td><span class="badge OPEN">OPEN</span></td>
-      <td>${esc(p.market_slug)}</td>
-      <td>${esc(p.side)}</td>
-      <td>${fmtNum(p.entry_price, 3)}</td>
-      <td>${fmtMoney(p.stake_usd)}</td>
-      <td>${fmtPct(p.edge_at_entry)}</td>
-      <td>T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s</td>
-    </tr>`;
+    rows += `<tr><td><span class="badge OPEN">OPEN</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td>T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s</td></tr>`;
   }
-  for (const p of closed.slice(0, 12)) {
-    rows += `<tr>
-      <td><span class="badge ${p.status}">${esc(p.status)}</span></td>
-      <td>${esc(p.market_slug)}</td>
-      <td>${esc(p.side)}</td>
-      <td>${fmtNum(p.entry_price, 3)}</td>
-      <td>${fmtMoney(p.stake_usd)}</td>
-      <td>${fmtPct(p.edge_at_entry)}</td>
-      <td class="${(p.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}">${fmtMoney(p.pnl_usd, true)}</td>
-    </tr>`;
+  for (const p of closed.slice(0, 10)) {
+    rows += `<tr><td><span class="badge ${p.status}">${esc(p.status)}</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td class="${(p.pnl_usd || 0) >= 0 ? 'pos' : 'neg real'}">${fmtMoney(p.pnl_usd, true)}</td></tr>`;
+  }
+  ordersEl.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Status</th><th>Side</th><th>Entry</th><th>Stake</th><th>P&amp;L / T-remaining</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// -- Gabagool (different shape — see gabagool_strategy.py docstring) -----
+
+function renderGabagoolPanel(state) {
+  const statsEl = document.getElementById("gabagool-stats");
+  const ordersEl = document.getElementById("gabagool-orders");
+
+  if (!state) {
+    statsEl.innerHTML = "";
+    ordersEl.innerHTML = `<div class="empty">no data yet — start the bot</div>`;
+    return;
   }
 
-  document.getElementById("orders-content").innerHTML = `
-    <div class="table-wrap">
-    <table>
-      <thead><tr><th>Status</th><th>Window</th><th>Side</th><th>Entry</th><th>Stake</th><th>Edge</th><th>P&amp;L / T-remaining</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
+  const stats = state.stats || {};
+  const profitCls = (stats.total_locked_profit || 0) >= 0 ? "pos" : "neg real";
+  statsEl.innerHTML = `
+    <div class="row"><span class="label">Bankroll</span><span class="value">${fmtMoney(state.bankroll)}</span></div>
+    <div class="stat-strip">
+      <div class="stat"><span class="label">Opportunities</span><span class="value">${stats.opportunities_checked || 0}</span></div>
+      <div class="stat"><span class="label">Trades O/C</span><span class="value">${stats.trades_opened || 0}/${stats.trades_closed || 0}</span></div>
+      <div class="stat"><span class="label">Locked Profit</span><span class="value ${profitCls}">${fmtMoney3(stats.total_locked_profit, true)}</span></div>
     </div>`;
+
+  const open = Object.values(state.open_positions || {});
+  const closed = state.recent_closed || [];
+  if (open.length === 0 && closed.length === 0) {
+    ordersEl.innerHTML = `<div class="empty">no open positions — scanning…</div>`;
+    return;
+  }
+  let rows = "";
+  const now = Date.now() / 1000;
+  for (const p of open) {
+    const remaining = p.end_epoch - now;
+    rows += `<tr><td><span class="badge OPEN">OPEN</span></td><td>${fmtNum(p.shares)}</td><td>${fmtMoney(p.total_cost)}</td>
+      <td class="${(p.net_profit || 0) >= 0 ? 'pos' : 'neg real'}">${fmtMoney3(p.net_profit, true)}</td><td>T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s</td></tr>`;
+  }
+  for (const t of closed.slice(0, 10)) {
+    rows += `<tr><td><span class="badge WON">CLOSED</span></td><td>${fmtNum(t.shares)}</td><td>${fmtMoney(t.total_cost)}</td>
+      <td class="${(t.net_profit || 0) >= 0 ? 'pos' : 'neg real'}">${fmtMoney3(t.net_profit, true)}</td><td>${esc(t.resolution || "")}</td></tr>`;
+  }
+  ordersEl.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Status</th><th>Shares</th><th>Cost</th><th>Profit</th><th>Closes/Resolution</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 async function poll() {
@@ -432,8 +486,10 @@ async function poll() {
     const data = await resp.json();
     renderPrice(data);
     renderWallet(data);
-    renderOrders(data);
-    document.getElementById("report-btn").classList.toggle("disabled", !data.state);
+    renderDirectionalPanel("paper", data.bots.paper);
+    renderDirectionalPanel("oracle_v2", data.bots.oracle_v2);
+    renderDirectionalPanel("oracle_v3", data.bots.oracle_v3);
+    renderGabagoolPanel(data.bots.gabagool);
     dot.className = "dot live";
     text.textContent = "live · " + new Date(data.server_time * 1000).toLocaleTimeString();
   } catch (e) {
@@ -457,7 +513,7 @@ async function pollBotStatus() {
     const resp = await fetch("/api/bot/status", {cache: "no-store"});
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
-    for (const mode of ["paper", "live"]) {
+    for (const mode of ["paper", "oracle_v2", "oracle_v3", "gabagool", "live"]) {
       const s = data[mode];
       const dot = document.getElementById(mode + "-dot");
       const text = document.getElementById(mode + "-status-text");
@@ -465,9 +521,8 @@ async function pollBotStatus() {
       text.textContent = s.running ? `running (pid ${s.pid})` : "stopped";
       document.getElementById(mode + "-start-btn").classList.toggle("disabled", s.running);
       document.getElementById(mode + "-stop-btn").classList.toggle("disabled", !s.running);
-      if (mode === "paper") {
-        document.getElementById("paper-reset-btn").classList.toggle("disabled", s.running);
-      }
+      const resetBtn = document.getElementById(mode + "-reset-btn");
+      if (resetBtn) resetBtn.classList.toggle("disabled", s.running);
     }
   } catch (e) {
     // leave last-known status displayed rather than flashing "checking..." on a transient error
@@ -509,14 +564,31 @@ async function onClickStartLive() {
 }
 
 function paramsFor(mode) {
-  if (mode === "paper") {
-    const maxOpen = document.getElementById("paper-max-open").value;
-    return {
-      bankroll: document.getElementById("paper-bankroll").value,
-      min_edge: document.getElementById("paper-min-edge").value,
-      max_position_pct: document.getElementById("paper-max-pos").value,
-      kelly_multiplier: document.getElementById("paper-kelly").value,
+  if (mode === "paper" || mode === "oracle_v2" || mode === "oracle_v3") {
+    // All three accept the same core flags — they're all paper_trader.py,
+    // oracle_v2/oracle_v3 the same script with --v2/--v3 (see its argparse).
+    const maxOpen = document.getElementById(`${mode}-max-open`).value;
+    const params = {
+      bankroll: document.getElementById(`${mode}-bankroll`).value,
+      min_edge: document.getElementById(`${mode}-min-edge`).value,
+      max_position_pct: document.getElementById(`${mode}-max-pos`).value,
+      kelly_multiplier: document.getElementById(`${mode}-kelly`).value,
       max_open_positions: maxOpen === "" ? null : maxOpen,
+    };
+    if (mode === "oracle_v2" || mode === "oracle_v3") {
+      params.min_prob = document.getElementById(`${mode}-min-prob`).value;
+      params.safety_factor = document.getElementById(`${mode}-safety-factor`).value;
+      params.entry_window_start = document.getElementById(`${mode}-entry-start`).value;
+      params.entry_window_end = document.getElementById(`${mode}-entry-end`).value;
+    }
+    return params;
+  }
+  if (mode === "gabagool") {
+    return {
+      bankroll: document.getElementById("gabagool-bankroll").value,
+      bucket_usd: document.getElementById("gabagool-bucket").value,
+      fee_rate: document.getElementById("gabagool-fee").value,
+      min_profit_margin: document.getElementById("gabagool-margin").value,
     };
   }
   const maxDailyLoss = document.getElementById("live-max-daily-loss").value;
@@ -594,35 +666,37 @@ function confirmStartLive() {
   startBot("live");
 }
 
-function showPaperResetConfirm() {
-  if (document.getElementById("paper-reset-btn").classList.contains("disabled")) return;
-  document.getElementById("paper-reset-confirm-row").style.display = "flex";
-  document.getElementById("paper-reset-confirm-input").value = "";
-  document.getElementById("paper-reset-confirm-input").focus();
+// -- reset (paper, oracle_v2, oracle_v3, gabagool — see web_dashboard.py docstring) --
+
+function showResetConfirm(mode) {
+  if (document.getElementById(mode + "-reset-btn").classList.contains("disabled")) return;
+  document.getElementById(mode + "-reset-confirm-row").style.display = "flex";
+  document.getElementById(mode + "-reset-confirm-input").value = "";
+  document.getElementById(mode + "-reset-confirm-input").focus();
 }
 
-function cancelPaperResetConfirm() {
-  document.getElementById("paper-reset-confirm-row").style.display = "none";
+function cancelResetConfirm(mode) {
+  document.getElementById(mode + "-reset-confirm-row").style.display = "none";
 }
 
-async function confirmPaperReset() {
-  const val = document.getElementById("paper-reset-confirm-input").value.trim();
+async function confirmReset(mode) {
+  const val = document.getElementById(mode + "-reset-confirm-input").value.trim();
   if (val !== "RESET") {
-    setBotMsg("paper", 'type exactly "RESET" to confirm', true);
+    setBotMsg(mode, 'type exactly "RESET" to confirm', true);
     return;
   }
-  cancelPaperResetConfirm();
-  setBotMsg("paper", "resetting…");
+  cancelResetConfirm(mode);
+  setBotMsg(mode, "resetting…");
   try {
-    const resp = await fetch("/api/paper/reset", {method: "POST"});
+    const resp = await fetch(`/api/${mode}/reset`, {method: "POST"});
     const data = await resp.json();
     if (!resp.ok) {
-      setBotMsg("paper", data.error || ("HTTP " + resp.status), true);
+      setBotMsg(mode, data.error || ("HTTP " + resp.status), true);
     } else {
-      setBotMsg("paper", `reset done — deleted ${data.deleted.length} file(s)`);
+      setBotMsg(mode, `reset done — deleted ${data.deleted.length} file(s)`);
     }
   } catch (e) {
-    setBotMsg("paper", e.message, true);
+    setBotMsg(mode, e.message, true);
   }
   poll();
   pollBotStatus();

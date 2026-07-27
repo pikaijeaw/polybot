@@ -22,10 +22,41 @@ so a per-trade prompt would just hang forever on a closed stdin):
      not total daily drawdown — a string of losses within the rate limit
      could still exceed what you meant to risk in a day. Worth setting
      explicitly (e.g. a fraction of --bankroll) if you care about that.
+  5. ClobHealthBreaker pings client.get_ok() immediately before every real
+     order submission and halts new trades after
+     --clob-max-consecutive-failures in a row (default 3), auto-resuming
+     the moment a check succeeds again — a defense against trading on a
+     degraded/unresponsive CLOB, independent of signal quality or the caps
+     above. See its class docstring.
+  6. Ghost-fill detection: if an order submission raises an exception, this
+     bot re-checks the real USDC balance before concluding the order truly
+     failed — a network exception doesn't guarantee the order didn't fill
+     on-chain anyway. A balance drop with no matching recorded position
+     halts ALL further trading (does NOT auto-resume, unlike #5) and sends
+     a Telegram alert. See LiveTrader._verify_no_ghost_fill(). This can
+     detect that a ghost fill likely happened, not recover/reconstruct the
+     resulting position — that still needs a human to check real positions
+     on Polymarket directly.
+
+--v2 swaps in oracle_lag_strategy_v2.OracleLagEngineV2 (three additional
+entry filters — probability floor, multiplicative margin-of-safety, bounded
+entry-time window — ported from a reference bot, see that module's
+docstring) instead of v1's OracleLagEngine. --v3 (mutually exclusive with
+--v2) additionally sizes off the live estimated bankroll instead of a fixed
+--bankroll — see oracle_lag_strategy_v3.py's docstring and
+LiveTrader.equity(). #5 and #6 above apply either way — they're
+execution-layer hardening, independent of which engine is picking signals.
+v1 remains the default.
 
 Order submission reuses order_executor's create_market_order/post_order
 call directly (the exact signing path already exercised by order_executor.py
-itself) rather than reimplementing it — see submit_live_market_order().
+itself) rather than reimplementing it — see submit_live_market_order(). A
+reference bot this was compared against warned of float-precision bugs in
+naive `1 - price` arithmetic breaking order construction; verified directly
+against this repo's pinned py_clob_client==0.34.6 that its own
+get_order_amounts()/get_market_order_amounts() already correct for this
+(decimal-places-aware rounding before the final int() conversion) — no
+change was needed here.
 
 Scope limits, read before trusting the numbers this bot reports:
   - Positions are tracked and reported (OPEN/WON/LOST, estimated P&L) by
@@ -44,6 +75,23 @@ completely separate from paper_trading/'s files.
 Usage:
     python live_trading/live_trader.py --max-stake-usd 2 --max-trades-per-hour 4
     python live_trading/live_trader.py --dry-run   # logs intended orders, never calls create_order/post_order
+    python live_trading/live_trader.py --v2 --min-edge 0.05 \
+        --state-file live_state_v2.json --trades-log live_trades_v2.jsonl \
+        --pid-file live_trader_v2.pid --autorestart-marker live_trader_v2.autorestart.json \
+        --perf-log-dir perf_logs_v2
+        # To run alongside a v1 instance, every one of --state-file/--trades-log/--pid-file/
+        # --autorestart-marker/--perf-log-dir needs to point somewhere v1 isn't writing —
+        # --pid-file especially, since pidfile.py can't tell v1 and v2 apart otherwise and the
+        # second process would just refuse to start. Both instances still share ONE real wallet/
+        # balance, so caps like --max-stake-usd and --max-trades-per-hour are NOT pooled between
+        # them — set both conservatively if running v1 and v2 live at the same time.
+    python live_trading/live_trader.py --v3 --min-edge 0.05 \
+        --state-file live_state_v3.json --trades-log live_trades_v3.jsonl \
+        --pid-file live_trader_v3.pid --autorestart-marker live_trader_v3.autorestart.json \
+        --perf-log-dir perf_logs_v3
+        # --v3 additionally compounds Kelly sizing off the live estimated bankroll. Same
+        # distinct-files requirement as --v2, mutually exclusive with it, and still shares the
+        # same real wallet — set caps conservatively if running more than one instance live.
 """
 
 import argparse
@@ -70,6 +118,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import btc_5m_market_finder as finder
 import btc_price_feed as price_feed
 import oracle_lag_strategy as strategy
+import oracle_lag_strategy_v2 as strategy_v2  # only constructed when --v2 is passed — see run()
+import oracle_lag_strategy_v3 as strategy_v3  # only constructed when --v3 is passed — see run()
 import order_executor
 import performance_tracker  # signals.csv / trades.csv / executions.csv
 import pidfile
@@ -151,6 +201,54 @@ class DailyLossGuard:
         now = now if now is not None else time.time()
         self._roll(now)
         return self._realized_pnl_today <= -abs(self.max_daily_loss_usd)
+
+
+class ClobHealthBreaker:
+    """Circuit breaker on CLOB reachability, checked immediately before each
+    real order submission (not on every market-poll tick — that would ping
+    an endpoint dozens of times a minute for no reason, since a poll only
+    reaches this point when a signal is about to be acted on). Pings
+    client.get_ok() — Polymarket's unauthenticated health endpoint, the same
+    one preflight_check.py already uses once at startup — and halts new
+    trades after max_consecutive_failures in a row, auto-resuming the moment
+    a check succeeds again. Unlike RateLimiter/DailyLossGuard this doesn't
+    mark the market slug as traded on a trip (see _maybe_open) — a CLOB
+    outage is exactly the kind of transient condition worth retrying on the
+    next poll within the same window, not giving up on for the full 5
+    minutes."""
+
+    def __init__(self, max_consecutive_failures: int = 3):
+        self.max_consecutive_failures = max_consecutive_failures
+        self._consecutive_failures = 0
+        self._tripped = False
+
+    def check(self, client) -> bool:
+        try:
+            client.get_ok()
+        except Exception as e:
+            self._consecutive_failures += 1
+            print(
+                f"CLOB health check failed ({self._consecutive_failures}/{self.max_consecutive_failures}): {e}",
+                file=sys.stderr,
+            )
+            if self._consecutive_failures >= self.max_consecutive_failures and not self._tripped:
+                self._tripped = True
+                print(
+                    f"CLOB circuit breaker TRIPPED after {self._consecutive_failures} consecutive failures — "
+                    "halting new trades until it recovers",
+                    file=sys.stderr,
+                )
+            return False
+
+        self._consecutive_failures = 0
+        if self._tripped:
+            print("CLOB circuit breaker: health check succeeded again, resuming trading", file=sys.stderr)
+        self._tripped = False
+        return True
+
+    @property
+    def tripped(self) -> bool:
+        return self._tripped
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +340,15 @@ class LiveTrader:
         trades_log_path: Path,
         rate_limiter: RateLimiter,
         loss_guard: DailyLossGuard,
+        clob_breaker: ClobHealthBreaker,
+        bankroll: float = 0.0,
         dry_run: bool = False,
         reset: bool = False,
         tracker: performance_tracker.PerformanceTracker | None = None,
         max_open_positions: int | None = 1,
+        telegram_token: str | None = None,
+        telegram_chat_id: str | None = None,
+        version_label: str = "v1",
     ):
         self.client = client
         self.limits = limits
@@ -254,9 +357,20 @@ class LiveTrader:
         self.trades_log_path = trades_log_path
         self.rate_limiter = rate_limiter
         self.loss_guard = loss_guard
+        self.clob_breaker = clob_breaker
+        self._reference_bankroll = bankroll
         self.dry_run = dry_run
         self.tracker = tracker
         self.max_open_positions = max_open_positions
+        self.telegram_token = telegram_token
+        self.telegram_chat_id = telegram_chat_id
+        self.version_label = version_label
+        # Set only by _verify_no_ghost_fill on a suspected ghost fill (see its
+        # docstring) — deliberately does NOT auto-resume like clob_breaker
+        # does. A ghost fill means this bot's own bookkeeping may no longer
+        # match reality; that warrants a human looking at real positions
+        # before any more orders go out, not an automatic retry.
+        self.ghost_fill_halted = False
         self.open_positions: dict = {}
         self.closed_positions: list = []
         self.traded_slugs: set = set()
@@ -301,6 +415,8 @@ class LiveTrader:
                 "max_trades_per_day": self.rate_limiter.max_per_day,
                 "max_daily_loss_usd": self.loss_guard.max_daily_loss_usd,
                 "daily_loss_guard_tripped": self.loss_guard.tripped(),
+                "clob_circuit_breaker_tripped": self.clob_breaker.tripped,
+                "ghost_fill_halted": self.ghost_fill_halted,
             },
             "recent_closed": [asdict(p) for p in self.closed_positions[-25:]],
         }
@@ -324,10 +440,65 @@ class LiveTrader:
             "total_staked": total_staked,
         }
 
+    def equity(self) -> float:
+        """Estimated current bankroll: --bankroll (the reference value at
+        first launch) plus realized_pnl. Unlike PaperTrader.equity() (which
+        reads back real cash restored verbatim from the state file), this is
+        NOT restart-safe — realized_pnl is summed from self.closed_positions,
+        which after a restart is only rebuilt from the capped `recent_closed`
+        tail (last 25) in the state file, so this understates true P&L once
+        more than 25 trades have closed across restarts. It's the best
+        available estimate without polling the real USDC balance on every
+        --v3 sizing decision (this bot already flags pnl_usd elsewhere as an
+        accounting estimate, not a confirmed on-chain settlement — same
+        caveat applies here, just now feeding into position sizing too)."""
+        return self._reference_bankroll + self.stats()["realized_pnl"]
+
     def _fetch_usdc_balance(self) -> float:
         resp = self.client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
         raw = resp.get("balance")
         return int(raw or 0) / 10**6
+
+    def _verify_no_ghost_fill(self, balance_before: float, context: str) -> None:
+        """Called only when submit_live_market_order raised an exception —
+        i.e. we don't know whether the order actually reached the exchange.
+        A network exception on the API call does NOT mean the order failed;
+        it can still have filled on-chain (the "ghost fill" case). Re-checks
+        the USDC balance and, if it dropped by more than a trivial amount
+        despite the failure, treats that as evidence a real position may
+        exist that this bot never recorded — halts ALL further trading
+        (self.ghost_fill_halted, checked at the top of _maybe_open) and
+        sends an urgent Telegram alert, rather than guessing at a
+        reconstruction from incomplete information. This can only detect
+        the fill happened, not what it was (side/price/shares) — that's a
+        deliberate scope limit, not an oversight: reconstructing a phantom
+        position wrong is worse than flagging it for a human to check
+        manually.
+
+        If the balance re-check itself fails, this can't tell you anything
+        one way or the other — it logs loudly and does NOT halt (failing
+        open here, since halting the bot on a balance-RPC hiccup alone,
+        with zero evidence of an actual ghost fill, would itself be an
+        overreaction)."""
+        try:
+            balance_after = self._fetch_usdc_balance()
+        except Exception as e:
+            print(f"GHOST-FILL CHECK FAILED (could not re-verify balance): {e} — {context}", file=sys.stderr)
+            return
+
+        dropped = balance_before - balance_after
+        if dropped <= 0.5:  # a trivial/no drop — consistent with the order genuinely not filling
+            return
+
+        self.ghost_fill_halted = True
+        msg = (
+            f"[Oracle-lag {self.version_label}] GHOST FILL SUSPECTED — {context}\n"
+            f"USDC balance dropped ${dropped:.2f} (${balance_before:.2f} -> ${balance_after:.2f}) despite the "
+            f"order call failing. A real position may exist that this bot has no record of.\n"
+            f"Halting all further trading until manually restarted — check your Polymarket positions."
+        )
+        print(msg, file=sys.stderr)
+        strategy.send_telegram_message(msg, self.telegram_token, self.telegram_chat_id)
 
     # -- trading ----------------------------------------------------------
 
@@ -373,6 +544,8 @@ class LiveTrader:
 
     def _maybe_open(self, market: finder.Market, up_ask: float, down_ask: float, computed) -> tuple:
         slug = market.slug
+        if self.ghost_fill_halted:
+            return None, "ghost_fill_halted"
         if slug in self.traded_slugs:
             return None, "already_traded_this_window"
         if computed is None:
@@ -423,6 +596,14 @@ class LiveTrader:
                 self.traded_slugs.add(slug)
                 return None, "insufficient_real_balance"
 
+            # Checked immediately before submission, not earlier in this
+            # function — no sense pinging the CLOB for a trade that's about
+            # to get rejected by a cap above anyway. Deliberately doesn't
+            # mark traded_slugs on failure (see ClobHealthBreaker's
+            # docstring) so this window gets retried on the next poll.
+            if not self.clob_breaker.check(self.client):
+                return None, "clob_unhealthy"
+
         try:
             result = submit_live_market_order(
                 self.client, self.limits, token_id, order_executor.BUY, stake_usd, self.dry_run
@@ -434,6 +615,8 @@ class LiveTrader:
         except Exception as e:
             print(f"ORDER FAILED {slug} {sig.side} stake=${stake_usd:.2f}: {e}", file=sys.stderr)
             self.traded_slugs.add(slug)
+            if not self.dry_run:
+                self._verify_no_ghost_fill(real_balance, f"{slug} {sig.side} stake=${stake_usd:.2f} (error: {e})")
             return None, "order_submit_failed"
 
         window = self.engine.market
@@ -624,17 +807,47 @@ async def run(args) -> int:
         )
         return 1
 
-    engine = strategy.OracleLagEngine(
-        bankroll_usd=args.bankroll,
-        kelly_multiplier=args.kelly_multiplier,
-        min_edge=args.min_edge,
-        max_position_pct=args.max_position_pct,
-        vol_window_seconds=args.vol_window,
-        fallback_sigma_annual=args.fallback_sigma_annual,
-    )
+    version_label = "v3" if args.v3 else ("v2" if args.v2 else "v1")
+
+    if args.v3:
+        engine = strategy_v3.OracleLagEngineV3(
+            bankroll_usd=args.bankroll,
+            kelly_multiplier=args.kelly_multiplier,
+            min_edge=args.min_edge,
+            max_position_pct=args.max_position_pct,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+            min_prob=args.min_prob,
+            safety_factor=args.safety_factor,
+            entry_window_start=args.entry_window_start,
+            entry_window_end=args.entry_window_end,
+        )
+    elif args.v2:
+        engine = strategy_v2.OracleLagEngineV2(
+            bankroll_usd=args.bankroll,
+            kelly_multiplier=args.kelly_multiplier,
+            min_edge=args.min_edge,
+            max_position_pct=args.max_position_pct,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+            min_prob=args.min_prob,
+            safety_factor=args.safety_factor,
+            entry_window_start=args.entry_window_start,
+            entry_window_end=args.entry_window_end,
+        )
+    else:
+        engine = strategy.OracleLagEngine(
+            bankroll_usd=args.bankroll,
+            kelly_multiplier=args.kelly_multiplier,
+            min_edge=args.min_edge,
+            max_position_pct=args.max_position_pct,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+        )
     tracker = None if args.no_perf_log else performance_tracker.PerformanceTracker(log_dir=args.perf_log_dir)
     rate_limiter = RateLimiter(args.max_trades_per_hour, args.max_trades_per_day)
     loss_guard = DailyLossGuard(args.max_daily_loss_usd)
+    clob_breaker = ClobHealthBreaker(args.clob_max_consecutive_failures)
     trader = LiveTrader(
         client,
         limits,
@@ -643,11 +856,20 @@ async def run(args) -> int:
         Path(args.trades_log),
         rate_limiter,
         loss_guard,
+        clob_breaker,
+        bankroll=args.bankroll,
         dry_run=args.dry_run,
         reset=args.reset,
         tracker=tracker,
         max_open_positions=args.max_open_positions,
+        telegram_token=args.telegram_token,
+        telegram_chat_id=args.telegram_chat_id,
+        version_label=version_label,
     )
+    if args.v3:
+        # Late-bound, same pattern as paper_trader.py — see equity()'s
+        # docstring for the restart-safety caveat specific to live trading.
+        engine.set_bankroll_provider(trader.equity)
 
     def on_tick(tick):
         if tick.kind == "trade":
@@ -680,8 +902,54 @@ def main():
         "--bankroll", type=float, default=50.0, help="Reference bankroll for Kelly sizing (default: 50.0)"
     )
     parser.add_argument("--kelly-multiplier", type=float, default=0.25)
-    parser.add_argument("--min-edge", type=float, default=0.02)
+    parser.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.02,
+        help="Minimum model-vs-market edge (default: 0.02). If using --v2/--v3, the reference filter set it was "
+        "ported from recommends 0.05 — this flag's default doesn't change automatically, pass it explicitly.",
+    )
     parser.add_argument("--max-position-pct", type=float, default=0.05)
+    version_group = parser.add_mutually_exclusive_group()
+    version_group.add_argument(
+        "--v2",
+        action="store_true",
+        help="Use oracle_lag_strategy_v2.OracleLagEngineV2 instead of v1's OracleLagEngine — same probability/"
+        "Kelly math, three additional entry filters (see --min-prob/--safety-factor/--entry-window-* and "
+        "oracle_lag_strategy_v2.py's module docstring). v1 remains the default.",
+    )
+    version_group.add_argument(
+        "--v3",
+        action="store_true",
+        help="Use oracle_lag_strategy_v3.OracleLagEngineV3 — v2's filters plus Kelly sizing off the live "
+        "estimated bankroll (--bankroll + realized P&L so far) instead of a fixed --bankroll, so stakes "
+        "compound as the bot's real balance grows/shrinks. Mutually exclusive with --v2. See "
+        "LiveTrader.equity()'s docstring for a restart-safety caveat specific to live trading.",
+    )
+    parser.add_argument(
+        "--min-prob",
+        type=float,
+        default=strategy_v2.DEFAULT_MIN_PROB,
+        help=f"(--v2/--v3 only) Absolute floor on model probability before considering a side (default: {strategy_v2.DEFAULT_MIN_PROB})",
+    )
+    parser.add_argument(
+        "--safety-factor",
+        type=float,
+        default=strategy_v2.DEFAULT_SAFETY_FACTOR,
+        help=f"(--v2/--v3 only) Only buy if price <= probability * this (default: {strategy_v2.DEFAULT_SAFETY_FACTOR})",
+    )
+    parser.add_argument(
+        "--entry-window-start",
+        type=float,
+        default=strategy_v2.DEFAULT_ENTRY_WINDOW_START,
+        help=f"(--v2/--v3 only) Start considering entries at this many seconds remaining (default: {strategy_v2.DEFAULT_ENTRY_WINDOW_START})",
+    )
+    parser.add_argument(
+        "--entry-window-end",
+        type=float,
+        default=strategy_v2.DEFAULT_ENTRY_WINDOW_END,
+        help=f"(--v2/--v3 only) Stop considering entries below this many seconds remaining (default: {strategy_v2.DEFAULT_ENTRY_WINDOW_END})",
+    )
     parser.add_argument("--vol-window", type=float, default=180.0)
     parser.add_argument("--fallback-sigma-annual", type=float, default=0.6)
     parser.add_argument("--market-poll-interval", type=float, default=2.0)
@@ -704,6 +972,13 @@ def main():
         type=float,
         default=None,
         help="Optional cumulative stop-loss: halt new trades once today's estimated P&L drops below -this (default: disabled)",
+    )
+    parser.add_argument(
+        "--clob-max-consecutive-failures",
+        type=int,
+        default=3,
+        help="Halt new trades after this many consecutive CLOB health-check (get_ok()) failures immediately "
+        "before an order submission; auto-resumes once a check succeeds again (default: 3)",
     )
 
     parser.add_argument("--host", default=order_executor.DEFAULT_HOST)

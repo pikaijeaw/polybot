@@ -25,3 +25,9 @@ ignore = [
 "paper_trading/web_dashboard.py" = ["E402"]
 # live_trader.py does the same for the root-level modules it imports.
 "live_trading/live_trader.py" = ["E402"]
+# trend_paper_trader.py does the same for paper_trading/paper_trader.py and
+# the root-level modules it reuses.
+"experiments/trend_paper_trader.py" = ["E402"]
+# gabagool_paper_trader.py does the same for the root-level
+# btc_15m_market_finder.py/gabagool_strategy.py modules it imports.
+"paper_trading/gabagool_paper_trader.py" = ["E402"]

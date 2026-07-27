@@ -17,6 +17,29 @@ paper_trading/paper_trades.jsonl
 paper_trading/paper_trader.pid
 paper_trading/paper_trader.autorestart.json
 paper_trading/perf_logs/
+paper_trading/gabagool_state.json
+paper_trading/gabagool_state.tmp
+paper_trading/gabagool_trades.jsonl
+paper_trading/gabagool_paper_trader.pid
+paper_trading/gabagool_paper_trader.autorestart.json
+
+# paper_trading/paper_trader.py --v2 runtime state, if run alongside v1 with
+# distinct --state-file/--trades-log/--pid-file — generated locally, not source
+paper_trading/paper_state_v2.json
+paper_trading/paper_state_v2.tmp
+paper_trading/paper_trades_v2.jsonl
+paper_trading/paper_trader_v2.pid
+paper_trading/paper_trader_v2.autorestart.json
+paper_trading/perf_logs_v2/
+
+# paper_trading/paper_trader.py --v3 runtime state, if run alongside v1/v2 with
+# distinct --state-file/--trades-log/--pid-file — generated locally, not source
+paper_trading/paper_state_v3.json
+paper_trading/paper_state_v3.tmp
+paper_trading/paper_trades_v3.jsonl
+paper_trading/paper_trader_v3.pid
+paper_trading/paper_trader_v3.autorestart.json
+paper_trading/perf_logs_v3/
 
 # live_trading/ runtime state — generated locally, not source
 live_trading/live_state.json
@@ -25,6 +48,32 @@ live_trading/live_trades.jsonl
 live_trading/live_trader.pid
 live_trading/live_trader.autorestart.json
 live_trading/perf_logs/
+
+# live_trading/live_trader.py --v2 runtime state, if run alongside v1 with
+# distinct --state-file/--trades-log/--pid-file — generated locally, not source
+live_trading/live_state_v2.json
+live_trading/live_state_v2.tmp
+live_trading/live_trades_v2.jsonl
+live_trading/live_trader_v2.pid
+live_trading/live_trader_v2.autorestart.json
+live_trading/perf_logs_v2/
+
+# live_trading/live_trader.py --v3 runtime state, if run alongside v1/v2 with
+# distinct --state-file/--trades-log/--pid-file — generated locally, not source
+live_trading/live_state_v3.json
+live_trading/live_state_v3.tmp
+live_trading/live_trades_v3.jsonl
+live_trading/live_trader_v3.pid
+live_trading/live_trader_v3.autorestart.json
+live_trading/perf_logs_v3/
+
+# experiments/trend_paper_trader.py runtime state — generated locally, not source
+experiments/trend_paper_state.json
+experiments/trend_paper_state.tmp
+experiments/trend_paper_trades.jsonl
+experiments/trend_paper_trader.pid
+experiments/trend_paper_trader.autorestart.json
+experiments/perf_logs/
 
 # watchdog.py runtime state (root) — generated locally, not source
 watchdog.pid

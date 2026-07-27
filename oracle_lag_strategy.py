@@ -367,9 +367,10 @@ class OracleLagEngine:
 
 
 class HourlyStatsTracker:
-    def __init__(self):
+    def __init__(self, version_label: str = "Oracle-lag scalper"):
         self._bucket_start = self._hour_start()
         self._signals: list = []
+        self._version_label = version_label
 
     @staticmethod
     def _hour_start(ts: float | None = None) -> int:
@@ -386,16 +387,16 @@ class HourlyStatsTracker:
         current_hour = self._hour_start(now)
         if current_hour == self._bucket_start:
             return None
-        summary = self.build_summary(self._bucket_start, self._signals)
+        summary = self.build_summary(self._bucket_start, self._signals, self._version_label)
         self._bucket_start = current_hour
         self._signals = []
         return summary
 
     @staticmethod
-    def build_summary(hour_start: int, signals: list) -> str:
+    def build_summary(hour_start: int, signals: list, version_label: str = "Oracle-lag scalper") -> str:
         hour_label = datetime.fromtimestamp(hour_start, tz=UTC).strftime("%Y-%m-%d %H:00 UTC")
         if not signals:
-            return f"*Oracle-lag scalper — {hour_label}*\nNo qualifying signals this hour."
+            return f"*{version_label} — {hour_label}*\nNo qualifying signals this hour."
 
         n = len(signals)
         up = sum(1 for s in signals if s.side == "UP")
@@ -406,7 +407,7 @@ class HourlyStatsTracker:
         best = max(signals, key=lambda s: s.edge)
 
         return (
-            f"*Oracle-lag scalper — {hour_label}*\n"
+            f"*{version_label} — {hour_label}*\n"
             f"Signals: {n}  (UP {up} / DOWN {down})\n"
             f"Avg edge: {avg_edge:+.1%}   Avg model prob: {avg_prob:.1%}\n"
             f"Total suggested stake: ${total_stake:,.2f}\n"

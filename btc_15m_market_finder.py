@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
 """
-Discover Polymarket's 5-minute BTC Up/Down markets.
+Discover Polymarket's 15-minute BTC Up/Down markets.
 
-These are the recurring "Bitcoin Up or Down - <time range>" markets on the
-"btc-up-or-down-5m" series (slugs look like btc-updown-5m-<epoch>, where
-<epoch> is the unix timestamp of the market's close/resolution time, always
-a multiple of 300). Windows are contiguous and 5-minutes-aligned, so instead
-of asking Gamma to list "recently active" markets, this computes the
-handful of epochs that should exist around the current wall-clock time and
-looks each one up directly by slug.
+Same series pattern as this project's 5-minute finder (btc_5m_market_finder.py),
+just on a different recurrence: these are the "btc-up-or-down-15m" series,
+slugs look like btc-updown-15m-<epoch> where <epoch> is the unix timestamp of
+the market's close/resolution time, always a multiple of 900. Confirmed live
+against Gamma directly (GET /markets?slug=btc-updown-15m-<computed epoch>
+returns a real market with series.slug == "btc-up-or-down-15m") rather than
+assumed from the 5m naming convention.
 
-That's deliberate, not just an optimization: Gamma's own "most recently
-created" ordering is unreliable here. Polymarket appears to batch pre-create
-a full day's worth of future 5-minute windows in advance, so sorting by
-creation time can surface tomorrow's just-created placeholder windows
-instead of today's genuinely-about-to-close one (which was created ~24h
-earlier and so looks "old" by that sort even though it's the one that's
-actually live). Direct slug lookups sidestep that entirely. This also means
-we don't rely on Gamma's `closed` flag, which lags behind actual resolution
-for these fast-cycling markets — status is derived from the epoch vs. wall
-clock instead.
+This is a deliberately separate file rather than a parameterized version of
+btc_5m_market_finder.py, same reasoning as trend_strategy.py living alongside
+oracle_lag_strategy.py rather than as a flag on it. It does, though, reuse
+resolve_market_outcome() and fetch_order_book() from btc_5m_market_finder.py
+by import rather than copy-pasting: both are already generic over
+`slug`/`token_id`, and this repo's convention (see CLAUDE.md) is that
+settlement-source logic in particular must not fork across strategies.
 
 No API key required — this only reads public market/orderbook data.
 
 Usage:
-    python btc_5m_market_finder.py                 # show current + upcoming
-    python btc_5m_market_finder.py --watch          # refresh every 5s
-    python btc_5m_market_finder.py --book           # include CLOB order book depth
-    python btc_5m_market_finder.py --json           # machine-readable output
+    python btc_15m_market_finder.py                 # show current + upcoming
+    python btc_15m_market_finder.py --watch          # refresh every 5s
+    python btc_15m_market_finder.py --book           # include CLOB order book depth
+    python btc_15m_market_finder.py --json           # machine-readable output
 """
 
 import argparse
@@ -40,10 +37,13 @@ from datetime import UTC, datetime
 
 import requests
 
+from btc_5m_market_finder import fetch_order_book, resolve_market_outcome
+
 GAMMA_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
-SLUG_RE = re.compile(r"^btc-updown-5m-(\d+)$")
-WINDOW_SECONDS = 300
+SLUG_RE = re.compile(r"^btc-updown-15m-(\d+)$")
+WINDOW_SECONDS = 900
+
+__all__ = ["Market", "fetch_btc_15m_markets", "fetch_order_book", "resolve_market_outcome", "WINDOW_SECONDS"]
 
 
 @dataclass
@@ -69,7 +69,7 @@ class Market:
     @property
     def status(self) -> str:
         now = time.time()
-        if now < self.epoch - 300:
+        if now < self.epoch - WINDOW_SECONDS:
             return "UPCOMING"
         if now < self.epoch:
             return "LIVE"
@@ -112,18 +112,19 @@ def _parse_market(m: dict) -> Market | None:
     )
 
 
-def fetch_btc_5m_markets(session: requests.Session, lookback: int = 1, lookahead: int = 2) -> list[Market]:
-    """Looks up the current 5-minute window plus `lookback` windows behind it
+def fetch_btc_15m_markets(session: requests.Session, lookback: int = 1, lookahead: int = 2) -> list[Market]:
+    """Looks up the current 15-minute window plus `lookback` windows behind it
     and `lookahead` windows ahead of it, by computing each one's slug
-    directly from wall-clock time (see module docstring for why — Gamma's
-    creation-time ordering can't be trusted to surface the right one)."""
+    directly from wall-clock time — same reasoning as
+    btc_5m_market_finder.py's fetch_btc_5m_markets (Gamma's creation-time
+    ordering surfaces tomorrow's pre-created windows, not today's live one)."""
     now = time.time()
     live_close_epoch = ((int(now) // WINDOW_SECONDS) + 1) * WINDOW_SECONDS
     epochs = [live_close_epoch + i * WINDOW_SECONDS for i in range(-lookback, lookahead + 1)]
 
     markets = []
     for epoch in epochs:
-        slug = f"btc-updown-5m-{epoch}"
+        slug = f"btc-updown-15m-{epoch}"
         resp = session.get(f"{GAMMA_API}/markets", params={"slug": slug}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
@@ -146,45 +147,6 @@ def _to_float(v) -> float | None:
         return None
 
 
-def fetch_order_book(session: requests.Session, token_id: str) -> dict:
-    resp = session.get(f"{CLOB_API}/book", params={"token_id": token_id}, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def resolve_market_outcome(session: requests.Session, slug: str) -> str | None:
-    """Looks up whether a market has resolved and, if so, which side won, by
-    reading Gamma's own outcomePrices for it. Returns "UP", "DOWN", or None
-    if not resolved yet (or not found). Shared by paper_trader.py and
-    live_trader.py so both settle against the exact same logic.
-
-    Passing closed=true is required, not optional: Gamma's default
-    /markets?slug= query only serves markets that are still active and
-    drops a slug entirely within ~10 minutes of its close, well before
-    SETTLE_FALLBACK_AFTER would even trigger the callers' price-based
-    fallback. Without this filter, this function returns None for every
-    market, every time, silently forcing 100% of settlements onto the
-    fallback path instead of Polymarket's real Chainlink-based resolution."""
-    resp = session.get(f"{GAMMA_API}/markets", params={"slug": slug, "closed": "true"}, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data:
-        return None
-    m = data[0]
-    try:
-        outcomes = json.loads(m.get("outcomes") or "[]")
-        prices = [float(p) for p in json.loads(m.get("outcomePrices") or "[]")]
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if len(outcomes) != 2 or len(prices) != 2:
-        return None
-    by_outcome = dict(zip(outcomes, prices, strict=True))
-    up, down = by_outcome.get("Up"), by_outcome.get("Down")
-    if up is None or down is None or up == down:
-        return None
-    return "UP" if up > down else "DOWN"
-
-
 def format_market(m: Market, show_book: bool, session: requests.Session) -> str:
     lines = [
         f"[{m.status:8s}] {m.question}",
@@ -200,16 +162,16 @@ def format_market(m: Market, show_book: bool, session: requests.Session) -> str:
         for label, token in (("Up", m.token_up), ("Down", m.token_down)):
             try:
                 book = fetch_order_book(session, token)
-                top_bids = book.get("bids", [])[-3:][::-1]
-                top_asks = book.get("asks", [])[:3]
-                lines.append(f"  {label} book  bids(top3)={top_bids}  asks(top3)={top_asks}")
+                asks = sorted(book.get("asks", []), key=lambda a: float(a["price"]))[:3]
+                bids = sorted(book.get("bids", []), key=lambda b: -float(b["price"]))[:3]
+                lines.append(f"  {label} book  bids(top3)={bids}  asks(top3)={asks}")
             except requests.RequestException as e:
                 lines.append(f"  {label} book  error={e}")
     return "\n".join(lines)
 
 
 def run_once(args, session: requests.Session):
-    markets = fetch_btc_5m_markets(session)
+    markets = fetch_btc_15m_markets(session)
 
     if args.json:
         payload = [
@@ -235,9 +197,9 @@ def run_once(args, session: requests.Session):
         return
 
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"=== BTC 5m Up/Down markets @ {now} ===")
+    print(f"=== BTC 15m Up/Down markets @ {now} ===")
     if not markets:
-        print("No open btc-updown-5m markets found right now.")
+        print("No open btc-updown-15m markets found right now.")
         return
     for m in markets:
         print(format_market(m, args.book, session))
@@ -257,7 +219,7 @@ def main():
     args = parser.parse_args()
 
     session = requests.Session()
-    session.headers.update({"User-Agent": "btc-5m-market-finder/1.0"})
+    session.headers.update({"User-Agent": "btc-15m-market-finder/1.0"})
 
     try:
         if args.watch:

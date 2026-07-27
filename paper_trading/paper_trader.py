@@ -37,6 +37,25 @@ Usage (run from anywhere — paths resolve relative to this script):
     python paper_trading/paper_trader.py
     python paper_trading/paper_trader.py --bankroll 5000 --kelly-multiplier 0.25
     python paper_trading/paper_trader.py --reset                # start over, ignore existing state
+    python paper_trading/paper_trader.py --v2 --min-edge 0.05 \
+        --state-file paper_state_v2.json --trades-log paper_trades_v2.jsonl \
+        --pid-file paper_trader_v2.pid --autorestart-marker paper_trader_v2.autorestart.json \
+        --perf-log-dir perf_logs_v2
+        # --v2 swaps in oracle_lag_strategy_v2.OracleLagEngineV2 (same probability/Kelly math, three
+        # additional entry filters — see that module's docstring) instead of v1's OracleLagEngine.
+        # To run this alongside a v1 instance (same directory, same machine), every one of
+        # --state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir needs to point
+        # somewhere v1 isn't writing — --pid-file especially: pidfile.py's single-instance
+        # protection can't tell v1 and v2 apart, so without a distinct --pid-file the second
+        # process just refuses to start, thinking the first one is already running.
+    python paper_trading/paper_trader.py --v3 --min-edge 0.05 \
+        --state-file paper_state_v3.json --trades-log paper_trades_v3.jsonl \
+        --pid-file paper_trader_v3.pid --autorestart-marker paper_trader_v3.autorestart.json \
+        --perf-log-dir perf_logs_v3
+        # --v3 swaps in oracle_lag_strategy_v3.OracleLagEngineV3 — v2's filters plus Kelly sizing off
+        # the live paper equity (compounds as the bankroll grows/shrinks) instead of the fixed
+        # --bankroll value v1/v2 size against for the whole run. Same distinct-files requirement as
+        # --v2 above, and mutually exclusive with it.
 """
 
 import argparse
@@ -61,6 +80,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import btc_5m_market_finder as finder
 import btc_price_feed as price_feed
 import oracle_lag_strategy as strategy
+import oracle_lag_strategy_v2 as strategy_v2  # only constructed when --v2 is passed — see run()
+import oracle_lag_strategy_v3 as strategy_v3  # only constructed when --v3 is passed — see run()
 import performance_tracker  # signals.csv / trades.csv / executions.csv
 import pidfile
 
@@ -447,14 +468,41 @@ async def stats_flush_loop(trader: PaperTrader, telegram_token, telegram_chat_id
 
 
 async def run(args):
-    engine = strategy.OracleLagEngine(
-        bankroll_usd=args.bankroll,
-        kelly_multiplier=args.kelly_multiplier,
-        min_edge=args.min_edge,
-        max_position_pct=args.max_position_pct,
-        vol_window_seconds=args.vol_window,
-        fallback_sigma_annual=args.fallback_sigma_annual,
-    )
+    if args.v3:
+        engine = strategy_v3.OracleLagEngineV3(
+            bankroll_usd=args.bankroll,
+            kelly_multiplier=args.kelly_multiplier,
+            min_edge=args.min_edge,
+            max_position_pct=args.max_position_pct,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+            min_prob=args.min_prob,
+            safety_factor=args.safety_factor,
+            entry_window_start=args.entry_window_start,
+            entry_window_end=args.entry_window_end,
+        )
+    elif args.v2:
+        engine = strategy_v2.OracleLagEngineV2(
+            bankroll_usd=args.bankroll,
+            kelly_multiplier=args.kelly_multiplier,
+            min_edge=args.min_edge,
+            max_position_pct=args.max_position_pct,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+            min_prob=args.min_prob,
+            safety_factor=args.safety_factor,
+            entry_window_start=args.entry_window_start,
+            entry_window_end=args.entry_window_end,
+        )
+    else:
+        engine = strategy.OracleLagEngine(
+            bankroll_usd=args.bankroll,
+            kelly_multiplier=args.kelly_multiplier,
+            min_edge=args.min_edge,
+            max_position_pct=args.max_position_pct,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+        )
     tracker = None if args.no_perf_log else performance_tracker.PerformanceTracker(log_dir=args.perf_log_dir)
     trader = PaperTrader(
         args.bankroll,
@@ -465,6 +513,13 @@ async def run(args):
         tracker=tracker,
         max_open_positions=args.max_open_positions,
     )
+    if args.v3:
+        # Late-bound: PaperTrader.equity() (cash + open-position stakes) is
+        # the restart-safe, absolute running bankroll — see
+        # oracle_lag_strategy_v3.py's module docstring for why this beats a
+        # realized_pnl delta. Wired after construction since the trader
+        # itself needs the already-built engine.
+        engine.set_bankroll_provider(trader.equity)
 
     def on_tick(tick):
         if tick.kind == "trade":
@@ -493,8 +548,56 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bankroll", type=float, default=1000.0)
     parser.add_argument("--kelly-multiplier", type=float, default=0.25)
-    parser.add_argument("--min-edge", type=float, default=0.02)
+    parser.add_argument(
+        "--min-edge",
+        type=float,
+        default=0.02,
+        help="Minimum model-vs-market edge (default: 0.02). If using --v2/--v3, the reference filter set it was "
+        "ported from recommends 0.05 — this flag's default doesn't change automatically, pass it explicitly.",
+    )
     parser.add_argument("--max-position-pct", type=float, default=0.05)
+    version_group = parser.add_mutually_exclusive_group()
+    version_group.add_argument(
+        "--v2",
+        action="store_true",
+        help="Use oracle_lag_strategy_v2.OracleLagEngineV2 instead of v1's OracleLagEngine — same probability/"
+        "Kelly math, three additional entry filters (see --min-prob/--safety-factor/--entry-window-*  and "
+        "oracle_lag_strategy_v2.py's module docstring). v1 remains the default; point --state-file/--trades-log "
+        "at different files than a concurrent v1 run so they don't share history.",
+    )
+    version_group.add_argument(
+        "--v3",
+        action="store_true",
+        help="Use oracle_lag_strategy_v3.OracleLagEngineV3 — v2's filters (--min-prob/--safety-factor/"
+        "--entry-window-*) plus Kelly sizing off the live paper bankroll (equity()) instead of a fixed "
+        "--bankroll, so stakes compound as equity grows/shrinks. Mutually exclusive with --v2; point "
+        "--state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir at files distinct from any "
+        "concurrent v1/v2 run.",
+    )
+    parser.add_argument(
+        "--min-prob",
+        type=float,
+        default=strategy_v2.DEFAULT_MIN_PROB,
+        help=f"(--v2/--v3 only) Absolute floor on model probability before considering a side (default: {strategy_v2.DEFAULT_MIN_PROB})",
+    )
+    parser.add_argument(
+        "--safety-factor",
+        type=float,
+        default=strategy_v2.DEFAULT_SAFETY_FACTOR,
+        help=f"(--v2/--v3 only) Only buy if price <= probability * this (default: {strategy_v2.DEFAULT_SAFETY_FACTOR})",
+    )
+    parser.add_argument(
+        "--entry-window-start",
+        type=float,
+        default=strategy_v2.DEFAULT_ENTRY_WINDOW_START,
+        help=f"(--v2/--v3 only) Start considering entries at this many seconds remaining (default: {strategy_v2.DEFAULT_ENTRY_WINDOW_START})",
+    )
+    parser.add_argument(
+        "--entry-window-end",
+        type=float,
+        default=strategy_v2.DEFAULT_ENTRY_WINDOW_END,
+        help=f"(--v2/--v3 only) Stop considering entries below this many seconds remaining (default: {strategy_v2.DEFAULT_ENTRY_WINDOW_END})",
+    )
     parser.add_argument(
         "--max-open-positions",
         type=int,

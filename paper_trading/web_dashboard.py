@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Web dashboard for monitoring and controlling every paper-trading strategy in
-this repo — oracle-lag v1, oracle-lag v2, oracle-lag v3, and Gabagool — plus
-live trading, all from one page. A separate process from any of the bots it
-manages by design.
+Web dashboard for the oracle-lag scalper — v1, v2, and v3, each switchable
+between Paper and Live mode right on its own panel — plus a wallet/price
+summary up top. A separate process from any of the bots it manages by
+design.
 
 Reads each bot's own state file/trades log from disk; never imports or talks
 to a bot process directly. That's deliberate isolation: restart this
@@ -14,15 +14,14 @@ process crashes or hangs, the bots keep trading uninterrupted.
 Mostly read-only: never signs anything or places orders, and only reads
 state/trades files and polls public price/chain data, same as dashboard.py
 (the terminal version, used for "paper"'s price/wallet-watching logic) —
-with four deliberate exceptions, /api/paper/reset, /api/oracle_v2/reset,
-/api/oracle_v3/reset, and /api/gabagool/reset (see below), which delete that
-bot's own state.
+with three deliberate exceptions, /api/paper/reset, /api/oracle_v2/reset,
+and /api/oracle_v3/reset (see below), which delete that bot's own state.
 
-Note: experiments/trend_paper_trader.py (EMA/Supertrend confirmation) used
-to have a panel here too. It's no longer wired into this dashboard — this
-was a UI-only removal, the script and its historical state/trades files are
-untouched and it remains fully runnable standalone; see its own module
-docstring.
+Note: this dashboard used to also carry Gabagool (arbitrage) and
+Trend-Confirm (EMA/Supertrend) panels. Both were removed — UI only:
+gabagool_strategy.py, gabagool_paper_trader.py, trend_strategy.py, and
+experiments/trend_paper_trader.py are all untouched and remain fully
+runnable standalone; see their own module docstrings.
 
 Usage:
     python paper_trading/web_dashboard.py
@@ -34,8 +33,7 @@ Then open http://127.0.0.1:5000 in a browser. Polls this app's own
 /api/data endpoint roughly every 1.5s via plain JS fetch() — no websockets.
 
 Bot control plane: this process also owns start/stop/status for
-paper_trader.py (v1/v2/v3), gabagool_paper_trader.py (this directory), and
-live_trading/live_trader.py (v1/v2/v3 — see /api/bot/*), spawning
+paper_trader.py (v1/v2/v3) and live_trading/live_trader.py (v1/v2/v3 — see /api/bot/*), spawning
 each as its own subprocess and tracking liveness via a pidfile (pidfile.py)
 rather than an in-memory handle — that way a dashboard restart can still see
 whether a bot is running instead of losing track of it or spawning a
@@ -52,24 +50,23 @@ unless you have a specific reason to expose these controls beyond
 localhost.
 
 "paper" (oracle-lag v1, 5m), "oracle_v2" (oracle-lag v2 — same engine,
-three additional entry filters, see oracle_lag_strategy_v2.py), "oracle_v3"
-(oracle-lag v3 — v2's filters plus Kelly sizing that compounds off live
-equity instead of a fixed bankroll, see oracle_lag_strategy_v3.py), and
-"gabagool" (YES/NO order-book arbitrage, 15m) are four independent paper
-strategies, all always-visible, all independently start/stop-able, and all
-rendered in parallel on one page — not a toggle between them. "paper",
-"oracle_v2", and "oracle_v3" run the exact same script (paper_trader.py
---v2 / --v3) against the exact same live market, which is the point: start
-them side by side to compare v1 vs v2 vs v3 in real time — see
-_oracle_v2_args/_oracle_v3_args, which have to explicitly override every
-one of paper_trader.py's --state-file/--trades-log/--pid-file/
---autorestart-marker/--perf-log-dir so "oracle_v2"/"oracle_v3" don't
-silently share "paper"'s files (that script's own defaults for all five are
-identical regardless of --v2/--v3). /api/data returns all four paper states
-in one payload under "bots" (see PAPER_STRATEGIES, _state_paths_for) rather
-than taking a selector; /api/report.csv and the reset endpoints still take
-a per-strategy target since a CSV export or a destructive reset is
-inherently a "pick one" action.
+three additional entry filters, see oracle_lag_strategy_v2.py), and
+"oracle_v3" (oracle-lag v3 — v2's filters plus Kelly sizing that compounds
+off live equity instead of a fixed bankroll, see oracle_lag_strategy_v3.py)
+are three independent paper strategies, all always-visible, all
+independently start/stop-able, and all rendered in parallel on one page —
+not a toggle between them. All three run the exact same script
+(paper_trader.py, --v2 / --v3 for the latter two) against the exact same
+live market, which is the point: start them side by side to compare v1 vs
+v2 vs v3 in real time — see _oracle_v2_args/_oracle_v3_args, which have to
+explicitly override every one of paper_trader.py's
+--state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir so
+"oracle_v2"/"oracle_v3" don't silently share "paper"'s files (that script's
+own defaults for all five are identical regardless of --v2/--v3).
+/api/data returns all three paper states in one payload under "bots" (see
+PAPER_STRATEGIES, _state_paths_for) rather than taking a selector;
+/api/report.csv and the reset endpoints still take a per-strategy target
+since a CSV export or a destructive reset is inherently a "pick one" action.
 
 "live"/"live_v2"/"live_v3" are the real-money counterparts, same
 --v2/--v3-selects-the-engine and explicit-path-override pattern as
@@ -81,15 +78,15 @@ LiveTrader._write_state: no cash/equity/starting_bankroll, but a "caps"
 block) — so templates/dashboard.html renders them with a dedicated function
 rather than reusing the paper renderer. Deliberately no reset endpoint for
 any of the three: wiping a live trade history isn't something to expose as
-a dashboard button, unlike the paper strategies above.
+a dashboard button, unlike the paper strategies above. Each of the three
+oracle-lag panels carries a Paper/Live mode switch — flipping to Live
+targets that panel's live counterpart (paper→live, oracle_v2→live_v2,
+oracle_v3→live_v3) through the same preflight+confirmation flow.
 
-/api/paper/reset, /api/oracle_v2/reset, /api/oracle_v3/reset, and
-/api/gabagool/reset (POST) permanently delete their own bot's state/trades
-files (and perf-log CSVs, for the three that use performance_tracker —
-"paper", "oracle_v2", and "oracle_v3"; not "gabagool", see
-gabagool_paper_trader.py). Each refuses (409) while its own bot is running,
-same reason two instances of either bot aren't allowed to share one state
-file (see pidfile.py).
+/api/paper/reset, /api/oracle_v2/reset, and /api/oracle_v3/reset (POST)
+permanently delete their own bot's state/trades files (and perf-log CSVs).
+Each refuses (409) while its own bot is running, same reason two instances
+of either bot aren't allowed to share one state file (see pidfile.py).
 """
 
 import argparse
@@ -112,10 +109,8 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 import dashboard as dash  # reuse LivePrice / WalletWatcher / load_paper_state — no duplicated logic
-import gabagool_paper_trader as gaba_bot  # reuse its DEFAULT_STATE_PATH/DEFAULT_TRADES_LOG_PATH/DEFAULT_PID_PATH
 from polymarket import SecureClient
 
-import gabagool_strategy
 import oracle_lag_strategy_v2 as strategy_v2
 import oracle_lag_strategy_v3 as strategy_v3
 import order_executor
@@ -187,14 +182,6 @@ BOT_SCRIPTS = {
         "pidfile": SCRIPT_DIR / "paper_trader.pid",
         "log": SCRIPT_DIR / "bot.log",
     },
-    "gabagool": {
-        "script": SCRIPT_DIR / "gabagool_paper_trader.py",
-        "pidfile": gaba_bot.DEFAULT_PID_PATH,
-        # Distinct from "paper"'s bot.log even though both scripts live in
-        # this same directory — sharing one log file would interleave two
-        # unrelated bots' output into one stream.
-        "log": SCRIPT_DIR / "gabagool_bot.log",
-    },
     "oracle_v2": {
         # Same script as "paper" — paper_trader.py's --v2 flag swaps in
         # oracle_lag_strategy_v2.OracleLagEngineV2 (see _oracle_v2_args).
@@ -256,14 +243,14 @@ def _live_state_paths_for(mode: str) -> tuple:
     return LIVE_STATE_PATH, LIVE_TRADES_LOG_PATH
 
 
-# "paper", "oracle_v2", "oracle_v3", and "gabagool" are four independent
-# strategies, each always visible and independently start/stop-able (see
+# "paper", "oracle_v2", and "oracle_v3" are three independent strategies,
+# each always visible and independently start/stop-able (see
 # templates/dashboard.html) — distinct from "live", which is its own
 # differently-gated panel. This maps which (state_file, trades_log) pair
 # backs each one; "paper"'s pair is mutable (set from
-# --state-file/--trades-log in main()), the other three are fixed to their
-# own scripts' defaults since there's no CLI flag for any of them here.
-PAPER_STRATEGIES = ("paper", "oracle_v2", "oracle_v3", "gabagool")
+# --state-file/--trades-log in main()), the other two are fixed to their
+# own scripts' defaults since there's no CLI flag for either here.
+PAPER_STRATEGIES = ("paper", "oracle_v2", "oracle_v3")
 
 
 def _state_paths_for(strategy: str) -> tuple:
@@ -271,8 +258,6 @@ def _state_paths_for(strategy: str) -> tuple:
         return ORACLE_V2_STATE_PATH, ORACLE_V2_TRADES_LOG_PATH
     if strategy == "oracle_v3":
         return ORACLE_V3_STATE_PATH, ORACLE_V3_TRADES_LOG_PATH
-    if strategy == "gabagool":
-        return gaba_bot.DEFAULT_STATE_PATH, gaba_bot.DEFAULT_TRADES_LOG_PATH
     return state_path, trades_log_path
 
 
@@ -283,7 +268,7 @@ def index():
 
 @app.route("/api/data")
 def api_data():
-    """Returns all four paper strategies' states in one payload — see
+    """Returns all three paper strategies' states in one payload — see
     module docstring: these render as parallel, always-visible panels now,
     not a toggle, so there's no `?strategy=` selector to pick just one.
     Also returns "live_bots" (live/live_v2/live_v3) read-only, same shape
@@ -307,10 +292,11 @@ def api_data():
             "server_time": time.time(),
             "price": {"value": live_price.price, "error": live_price.error},
             "wallet": {
-                "configured": wallet.address is not None,
-                "address": wallet.address,
+                "configured": wallet.eoa_address is not None,
+                "eoa_address": wallet.eoa_address,
+                "address": wallet.address,  # Deposit Wallet — resolved lazily, None until first successful refresh
                 "pol": wallet.pol_balance,
-                "usdc": wallet.usdc_balance,
+                "pusd": wallet.pusd_balance,
                 "error": wallet.error,
             },
             "bots": bots,
@@ -427,16 +413,6 @@ def _oracle_v3_args(payload: dict) -> list:
     ]
 
 
-def _gabagool_args(payload: dict) -> list:
-    return [
-        "--bankroll", str(_float_param(payload, "bankroll", 1000.0, lo=5.0)),
-        "--bucket-usd", str(_float_param(payload, "bucket_usd", 50.0, lo=5.0, hi=100000.0)),
-        "--fee-rate", str(_float_param(payload, "fee_rate", gabagool_strategy.FEE_RATE_CRYPTO, lo=0.0, hi=1.0)),
-        "--min-profit-margin", str(_float_param(payload, "min_profit_margin", 0.005, lo=0.0, hi=0.5)),
-        "--min-seconds-remaining", str(_float_param(payload, "min_seconds_remaining", 30.0, lo=0.0, hi=800.0)),
-    ]  # fmt: skip
-
-
 def _live_args(payload: dict) -> list:
     args = [
         "--bankroll", str(_float_param(payload, "bankroll", 50.0, lo=1.0)),
@@ -520,7 +496,6 @@ ARGS_BUILDERS = {
     "paper": _paper_args,
     "oracle_v2": _oracle_v2_args,
     "oracle_v3": _oracle_v3_args,
-    "gabagool": _gabagool_args,
     "live": _live_args,
     "live_v2": _live_v2_args,
     "live_v3": _live_v3_args,
@@ -688,23 +663,6 @@ def api_paper_reset():
     return jsonify({"ok": True, "deleted": deleted})
 
 
-@app.route("/api/gabagool/reset", methods=["POST"])
-def api_gabagool_reset():
-    status = _bot_status("gabagool")
-    if status["running"]:
-        return jsonify({"error": f"gabagool bot is running (pid {status['pid']}) — stop it before resetting"}), 409
-
-    sp, tl = _state_paths_for("gabagool")
-    deleted = []
-    for path in [sp, sp.with_suffix(".tmp"), tl]:
-        try:
-            path.unlink()
-            deleted.append(str(path.relative_to(PROJECT_ROOT)))
-        except FileNotFoundError:
-            pass
-    return jsonify({"ok": True, "deleted": deleted})
-
-
 @app.route("/api/oracle_v2/reset", methods=["POST"])
 def api_oracle_v2_reset():
     status = _bot_status("oracle_v2")
@@ -827,53 +785,6 @@ def build_report_csv(strategy: str = "paper") -> str:
     return buf.getvalue()
 
 
-def build_gabagool_report_csv() -> str:
-    """Gabagool's trades are shaped nothing like the oracle-lag strategies'
-    (two-leg arbitrage fills, not a single directional side/entry/edge) — see
-    gabagool_strategy.py's module docstring — so this is a separate builder
-    rather than another branch of build_report_csv() above."""
-    sp, tl = _state_paths_for("gabagool")
-    state = dash.load_paper_state(sp) or {}
-    stats = state.get("stats", {})
-    trades = sorted(load_trade_history(tl), key=lambda t: t.get("opened_at") or 0)
-
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["Gabagool (BTC 15m arbitrage) — paper trading report"])
-    w.writerow(["Generated", _iso(time.time())])
-    w.writerow([])
-    w.writerow(["Starting bankroll", f"${state.get('starting_bankroll', 0):.2f}"])
-    w.writerow(["Current bankroll", f"${state.get('bankroll', 0):.2f}"])
-    w.writerow(["Current equity", f"${state.get('equity', 0):.2f}"])
-    w.writerow(["Opportunities checked", stats.get("opportunities_checked", 0)])
-    w.writerow(["Trades opened", stats.get("trades_opened", 0)])
-    w.writerow(["Trades closed", stats.get("trades_closed", 0)])
-    w.writerow(["Total locked profit", f"${stats.get('total_locked_profit', 0):+.3f}"])
-    w.writerow(["Total fees paid", f"${stats.get('total_fees_paid', 0):.3f}"])
-    w.writerow([])
-    w.writerow(
-        ["Market", "Shares", "Avg Up", "Avg Down", "Total Cost", "Fees", "Net Profit", "Margin/Share", "Opened At", "Closed At", "Resolution", "Resolution Source"]
-    )  # fmt: skip
-    for t in trades:
-        w.writerow(
-            [
-                t.get("market_slug", ""),
-                f"{t.get('shares', 0):.2f}",
-                f"{t.get('avg_price_up', 0):.4f}",
-                f"{t.get('avg_price_down', 0):.4f}",
-                f"{t.get('total_cost', 0):.2f}",
-                f"{t.get('fee_up', 0) + t.get('fee_down', 0):.3f}",
-                f"{t.get('net_profit', 0):+.3f}",
-                f"{t.get('net_margin_per_share', 0):+.4f}",
-                _iso(t.get("opened_at")),
-                _iso(t.get("closed_at")),
-                t.get("resolution", ""),
-                t.get("resolution_source", ""),
-            ]
-        )
-    return buf.getvalue()
-
-
 @app.route("/api/report.csv")
 def api_report_csv():
     strategy = request.args.get("strategy", "paper")
@@ -883,7 +794,7 @@ def api_report_csv():
     if not sp.exists():
         return Response("No paper trading data yet.", mimetype="text/plain", status=404)
 
-    csv_text = build_gabagool_report_csv() if strategy == "gabagool" else build_report_csv(strategy)
+    csv_text = build_report_csv(strategy)
     filename = f"{strategy}_trading_report_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(
         csv_text,

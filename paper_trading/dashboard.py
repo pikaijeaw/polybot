@@ -13,10 +13,13 @@ paper_trader.py's state, it just watches:
     ORDERS     Open and recently-closed paper positions, win rate, realized
                P&L — from paper_trader.py's state file.
 
-    WALLET     Paper bankroll/equity always; PLUS real on-chain POL and
-               USDC.e balance for POLYMARKET_PRIVATE_KEY's address if one is
-               configured (.env), refreshed on a slower cadence. This only
-               ever reads public chain state — no signing, no CLOB auth.
+    WALLET     Paper bankroll/equity always; PLUS real on-chain POL (at your
+               EOA) and pUSD (at your Deposit Wallet — a smart-contract
+               wallet derived from your EOA, not the EOA itself; see
+               CLAUDE.md's "Collateral and the CLOB SDK" section) for
+               POLYMARKET_PRIVATE_KEY's address if one is configured (.env),
+               refreshed on a slower cadence. Only ever reads public chain
+               state — no order placement.
 
 Run it alongside paper_trader.py in a separate terminal:
 
@@ -54,20 +57,25 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 DEFAULT_STATE_PATH = SCRIPT_DIR / "paper_state.json"
 DEFAULT_RPC_URL = "https://polygon-bor-rpc.publicnode.com"
-USDC_COLLATERAL_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Polygon USDC.e
-USDC_DECIMALS = 6
+COLLATERAL_DECIMALS = 6
 WALLET_REFRESH_SECONDS = 30.0
 PRICE_REFRESH_SECONDS = 2.0
 
 ERC20_ABI = [
-    {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf",
-     "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
+    {
+        "constant": True,
+        "inputs": [{"name": "_owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "balance", "type": "uint256"}],
+        "type": "function",
+    },
 ]
 
 
 # ---------------------------------------------------------------------------
 # Data sources
 # ---------------------------------------------------------------------------
+
 
 class LivePrice:
     """Polls Binance's REST last-price endpoint on its own slow cadence —
@@ -83,8 +91,9 @@ class LivePrice:
         if time.time() < self._next_poll:
             return
         try:
-            resp = requests.get("https://api.binance.com/api/v3/ticker/price",
-                                 params={"symbol": self.symbol}, timeout=5)
+            resp = requests.get(
+                "https://api.binance.com/api/v3/ticker/price", params={"symbol": self.symbol}, timeout=5
+            )
             resp.raise_for_status()
             self.price = float(resp.json()["price"])
             self.error = None
@@ -94,35 +103,60 @@ class LivePrice:
 
 
 class WalletWatcher:
-    """Read-only on-chain balance check. Only ever derives the address from
-    the private key in memory to look itself up — never signs, never makes a
-    network call with the key."""
+    """Read-only on-chain balance check. Never signs an order, never submits
+    a transaction. Two addresses matter, not one: `eoa_address` is derived
+    locally from the private key; `address` is the Deposit Wallet -- a
+    smart-contract wallet derived from that EOA, not the EOA itself, which
+    is what actually holds pUSD and what the CLOB trades against (see
+    CLAUDE.md's "Collateral and the CLOB SDK" section). Deriving it needs a
+    real (read-only) SecureClient construction, done ONCE and cached in
+    _ensure_deposit_wallet() rather than on every refresh, since it's
+    deterministic for a given EOA and can never change."""
 
     def __init__(self, rpc_url: str):
+        self.eoa_address: str | None = None
         self.address: str | None = None
         self.error: str | None = None
         self.pol_balance: float | None = None
-        self.usdc_balance: float | None = None
+        self.pusd_balance: float | None = None
         self._next_poll = 0.0
+        self._private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
+        self._pusd_contract = None
 
-        key = os.environ.get("POLYMARKET_PRIVATE_KEY")
-        if key:
+        if self._private_key:
             try:
                 from eth_account import Account
-                self.address = Account.from_key(key).address
+
+                self.eoa_address = Account.from_key(self._private_key).address
             except Exception as e:
                 self.error = f"bad POLYMARKET_PRIVATE_KEY: {e}"
 
         self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
-        self.usdc = self.w3.eth.contract(address=Web3.to_checksum_address(USDC_COLLATERAL_ADDRESS), abi=ERC20_ABI)
+
+    def _ensure_deposit_wallet(self):
+        if self.address is not None or self._private_key is None:
+            return
+        from polymarket import SecureClient
+
+        client = SecureClient.create(private_key=self._private_key)
+        try:
+            self.address = client.wallet
+            self._pusd_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(client.environment.collateral_token), abi=ERC20_ABI
+            )
+        finally:
+            client.close()
 
     def maybe_refresh(self):
-        if self.address is None or time.time() < self._next_poll:
+        if self.eoa_address is None or time.time() < self._next_poll:
             return
         try:
-            addr = Web3.to_checksum_address(self.address)
-            self.pol_balance = self.w3.eth.get_balance(addr) / 10 ** 18
-            self.usdc_balance = self.usdc.functions.balanceOf(addr).call() / 10 ** USDC_DECIMALS
+            self._ensure_deposit_wallet()
+            self.pol_balance = self.w3.eth.get_balance(Web3.to_checksum_address(self.eoa_address)) / 10**18
+            self.pusd_balance = (
+                self._pusd_contract.functions.balanceOf(Web3.to_checksum_address(self.address)).call()
+                / 10**COLLATERAL_DECIMALS
+            )
             self.error = None
         except Exception as e:
             self.error = str(e)
@@ -139,6 +173,7 @@ def load_paper_state(state_path: Path) -> dict | None:
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
+
 
 def fmt_money(x, signed=False) -> str:
     if x is None:
@@ -180,9 +215,11 @@ def render_price_panel(live_price: LivePrice, state: dict | None) -> Panel:
 
     approx = "~" if engine.get("anchor_is_approximate") else ""
     lines.append(f"\nWindow: {engine.get('market_slug', '-')}\n")
-    lines.append(f"Anchor: {approx}{engine.get('anchor_price', 0):.2f}   "
-                 f"Last: {engine.get('last_price', 0):.2f}   "
-                 f"T-{engine.get('seconds_remaining', 0):.0f}s\n")
+    lines.append(
+        f"Anchor: {approx}{engine.get('anchor_price', 0):.2f}   "
+        f"Last: {engine.get('last_price', 0):.2f}   "
+        f"T-{engine.get('seconds_remaining', 0):.0f}s\n"
+    )
     p_up = engine.get("p_up")
     if p_up is not None:
         lines.append(f"Model P(Up): {p_up * 100:.1f}%   sigma/sqrt(s): {engine.get('sigma_per_sqrt_sec', 0):.6f}\n")
@@ -201,7 +238,9 @@ def render_price_panel(live_price: LivePrice, state: dict | None) -> Panel:
 
 def render_orders_panel(state: dict | None) -> Panel:
     if not state:
-        return Panel(Text("No paper_trader.py data yet — is it running?", style="dim"), title="ORDERS", border_style="yellow")
+        return Panel(
+            Text("No paper_trader.py data yet — is it running?", style="dim"), title="ORDERS", border_style="yellow"
+        )
 
     open_positions = state.get("open_positions", [])
     recent_closed = state.get("recent_closed", [])[::-1]  # most recent first
@@ -217,14 +256,27 @@ def render_orders_panel(state: dict | None) -> Panel:
 
     for p in open_positions:
         remaining = p["end_epoch"] - time.time()
-        table.add_row("[yellow]OPEN[/yellow]", p["market_slug"], p["side"], f"{p['entry_price']:.3f}",
-                      fmt_money(p["stake_usd"]), fmt_pct(p["edge_at_entry"]), f"T{remaining:+.0f}s")
+        table.add_row(
+            "[yellow]OPEN[/yellow]",
+            p["market_slug"],
+            p["side"],
+            f"{p['entry_price']:.3f}",
+            fmt_money(p["stake_usd"]),
+            fmt_pct(p["edge_at_entry"]),
+            f"T{remaining:+.0f}s",
+        )
 
     for p in recent_closed[:8]:
         status_style = "green" if p["status"] == "WON" else "red"
-        table.add_row(f"[{status_style}]{p['status']}[/{status_style}]", p["market_slug"], p["side"],
-                      f"{p['entry_price']:.3f}", fmt_money(p["stake_usd"]), fmt_pct(p["edge_at_entry"]),
-                      fmt_money(p["pnl_usd"], signed=True))
+        table.add_row(
+            f"[{status_style}]{p['status']}[/{status_style}]",
+            p["market_slug"],
+            p["side"],
+            f"{p['entry_price']:.3f}",
+            fmt_money(p["stake_usd"]),
+            fmt_pct(p["edge_at_entry"]),
+            fmt_money(p["pnl_usd"], signed=True),
+        )
 
     if not open_positions and not recent_closed:
         return Panel(Text("No trades yet.", style="dim"), title="ORDERS", border_style="yellow")
@@ -245,9 +297,11 @@ def render_wallet_panel(state: dict | None, wallet: WalletWatcher) -> Panel:
         lines.append(f"{fmt_pct(ret)}", style=ret_style)
         lines.append(")\n")
         stats = state.get("stats", {})
-        lines.append(f"  Trades: {stats.get('trades', 0)}   "
-                      f"Win rate: {fmt_pct(stats.get('win_rate'), signed=False)}   "
-                      f"Realized P&L: ")
+        lines.append(
+            f"  Trades: {stats.get('trades', 0)}   "
+            f"Win rate: {fmt_pct(stats.get('win_rate'), signed=False)}   "
+            f"Realized P&L: "
+        )
         pnl_style = "green" if (stats.get("realized_pnl") or 0) >= 0 else "red"
         lines.append(f"{fmt_money(stats.get('realized_pnl'), signed=True)}\n", style=pnl_style)
         lines.append(f"  Updated: {age_str(state.get('updated_at'))}\n", style="dim")
@@ -255,20 +309,22 @@ def render_wallet_panel(state: dict | None, wallet: WalletWatcher) -> Panel:
         lines.append("  no data yet — is paper_trader.py running?\n", style="dim")
 
     lines.append("\nReal wallet (read-only)\n", style="bold")
-    if wallet.address is None:
+    if wallet.eoa_address is None:
         reason = wallet.error or "POLYMARKET_PRIVATE_KEY not set in .env"
         lines.append(f"  not configured ({reason})\n", style="dim")
     else:
-        lines.append(f"  {wallet.address}\n", style="dim")
+        lines.append(f"  EOA: {wallet.eoa_address}\n", style="dim")
+        if wallet.address:
+            lines.append(f"  Deposit Wallet: {wallet.address}\n", style="dim")
         if wallet.error:
             lines.append(f"  error: {wallet.error}\n", style="red")
         else:
             pol_style = "green" if (wallet.pol_balance or 0) > 0.01 else "yellow"
-            usdc_style = "green" if (wallet.usdc_balance or 0) > 0 else "yellow"
+            pusd_style = "green" if (wallet.pusd_balance or 0) > 0 else "yellow"
             lines.append("  POL: ", style="")
             lines.append(f"{wallet.pol_balance:.4f}" if wallet.pol_balance is not None else "-", style=pol_style)
-            lines.append("   USDC: ", style="")
-            lines.append(f"{wallet.usdc_balance:.4f}\n" if wallet.usdc_balance is not None else "-\n", style=usdc_style)
+            lines.append("   pUSD: ", style="")
+            lines.append(f"{wallet.pusd_balance:.4f}\n" if wallet.pusd_balance is not None else "-\n", style=pusd_style)
 
     return Panel(lines, title="WALLET", border_style="magenta")
 
@@ -290,7 +346,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_PATH))
     parser.add_argument("--rpc-url", default=DEFAULT_RPC_URL)
-    parser.add_argument("--refresh-interval", type=float, default=1.0, help="Screen redraw interval in seconds (default: 1.0)")
+    parser.add_argument(
+        "--refresh-interval", type=float, default=1.0, help="Screen redraw interval in seconds (default: 1.0)"
+    )
     args = parser.parse_args()
 
     state_path = Path(args.state_file)

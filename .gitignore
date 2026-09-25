@@ -55,6 +55,9 @@ experiments/perf_logs/
 # web_dashboard.py Reset archives old runs here — generated locally, not source
 paper_trading/archive/
 
+# web_dashboard.py background pid (see README "Running in the background")
+paper_trading/web_dashboard.pid
+
 # watchdog.py runtime state (root) — generated locally, not source
 watchdog.pid
 

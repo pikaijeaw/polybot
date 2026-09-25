@@ -1,48 +1,19 @@
 ---
 name: new-polybot-script
-description: Use when adding a new Python script to this Polymarket trading bot project (PolyBot) — e.g. "make a script that...", "add a tool to...". Captures the established conventions for credential handling, dry-run safety on money-touching actions, .env resolution, cross-module imports, and how scripts here get verified. Not for editing existing scripts, only for creating new ones.
+description: Use when adding a new Python script to this Polymarket trading bot project (PolyBot) — e.g. "make a script that...", "add a tool to...". Captures the established conventions for .env resolution, cross-module imports, and how scripts here get verified. Not for editing existing scripts, only for creating new ones.
 ---
 
 # Adding a new script to PolyBot
 
-Before writing, check whether an existing script already does most of what's needed (`oracle_lag_strategy.py` for signals, `order_executor.py` for orders, `preflight_check.py` for read-only checks) — extend rather than duplicate where it fits.
+Before writing, check whether an existing script already does most of what's needed (`oracle_lag_strategy.py` for signals, `paper_trading/paper_trader.py` for simulated fills, `notify.py` for Telegram) — extend rather than duplicate where it fits.
 
-## 1. Does this script touch real money or send a real transaction?
+## 1. Paper only
 
-If yes (places an order, sends an on-chain tx, moves funds) — this is the required pattern, modeled on `order_executor.py` and `approve_usdc.py`:
-
-- Default to a **dry run**: build and print exactly what would happen, no network mutation. Print something like `mode={'LIVE' if live else 'DRY RUN'}` so it's unambiguous in the output.
-- Add a `--live` flag gating any real submission.
-- Even with `--live`, prompt for a **typed "yes"** per action unless `--yes` is also passed:
-  ```python
-  def confirm_or_abort(summary: str, auto_yes: bool) -> bool:
-      print(summary)
-      if auto_yes:
-          return True
-      try:
-          answer = input("Type 'yes' to submit this transaction: ")
-      except EOFError:
-          answer = ""
-      if answer.strip().lower() != "yes":
-          print("Not confirmed; aborting.", file=sys.stderr)
-          return False
-      return True
-  ```
-- **Never accept a private key as a CLI argument.** Reuse `order_executor.py`'s credential loading instead of reimplementing it:
-  ```python
-  from order_executor import load_private_key, DEFAULT_CHAIN_ID
-  # add these same flags: --private-key-env (default POLYMARKET_PRIVATE_KEY), --keystore
-  private_key = load_private_key(args)  # call this exactly once — --keystore prompts for a
-                                          # password, and calling it twice double-prompts
-  ```
-  If you also need a `ClobClient`, construct it directly with the already-loaded `private_key` rather than calling `order_executor.build_client(args)`, which calls `load_private_key` again internally.
-- If the script name/purpose could be confused with an existing `--live` flag that means something *less* dangerous (e.g. `oracle_lag_strategy.py --live` just means "use live data, still read-only"), say so explicitly in the new script's docstring to avoid the ambiguity biting someone later.
-
-If the script is read-only (checks, discovery, monitoring) — no `--live`/`--yes` needed, model it on `preflight_check.py` or `btc_5m_market_finder.py` instead.
+This repo is paper-trading only — all wallet, CLOB-auth, and order-placement code was removed on purpose. Don't add a script that signs orders or sends transactions unless the user explicitly asks for live trading back; if they do, it's a design decision to raise with them, not a script to write quietly.
 
 ## 2. Loading .env / credentials
 
-Don't invent a new loading path. If the script needs `POLYMARKET_PRIVATE_KEY`, `TELEGRAM_BOT_TOKEN`, etc., either import them from wherever they're already loaded (e.g. `order_executor.py` already calls `load_dotenv()` at import time) or add your own at the top of the file, resolved relative to the project root regardless of cwd:
+Don't invent a new loading path. If the script needs `TELEGRAM_BOT_TOKEN` etc., either import them from wherever they're already loaded (e.g. `notify.py` already calls `load_dotenv()` at import time — use `notify.send_telegram_message` rather than posting to Telegram yourself) or add your own at the top of the file, resolved relative to the project root regardless of cwd:
 ```python
 from pathlib import Path
 from dotenv import load_dotenv
@@ -68,13 +39,7 @@ import oracle_lag_strategy as strategy  # etc.
 
 There's no unit test suite in this repo — new scripts are verified by actually running them against the real APIs (Binance, Polymarket Gamma/CLOB), not mocks:
 
-- For read-only scripts: just run it live and inspect the output.
-- For anything that spends money or signs transactions: generate a disposable throwaway wallet with zero balance and run the **real** flow against it —
-  ```python
-  from eth_account import Account
-  acct = Account.create()  # never funded, never reused
-  ```
-  This confirms the full request/signing/submission path reaches the real API and fails for the *expected* reason (insufficient balance, geoblock, etc.) rather than silently masking a bug with a mock. Confirm the dry-run path separately (prints the right thing, sends nothing), then confirm `--live` reaches the network and fails cleanly (not a stack trace) when underfunded.
+- Run it live against the real public endpoints and inspect the output.
 - Clean up any state files your test run created (e.g. `paper_trading/paper_state.json`) before finishing, unless the user is actively using them.
 
 ## 5. New dependencies

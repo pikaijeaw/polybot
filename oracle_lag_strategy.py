@@ -20,7 +20,7 @@ Three parts, usable standalone or together:
         Binary-market Kelly criterion position sizing (quarter-Kelly by
         default).
 
-    HourlyStatsTracker / send_telegram_message
+    HourlyStatsTracker / notify.send_telegram_message
         Rolls signals up into an hourly summary and can push it to a
         Telegram chat via the Bot API.
 
@@ -37,7 +37,6 @@ it does not place orders.
 import argparse
 import asyncio
 import math
-import os
 import signal as signal_module
 import sys
 import time
@@ -52,6 +51,7 @@ from dotenv import load_dotenv
 
 import btc_5m_market_finder as finder
 import btc_price_feed as price_feed
+import notify
 
 # Real env vars always win over .env — load_dotenv() defaults to not overriding.
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -118,20 +118,25 @@ class RollingVolatilityEstimator:
         if len(samples) < self.min_samples:
             return self._fallback_sigma_per_sqrt_sec
 
-        sum_sq_returns = 0.0
-        total_dt = 0.0
-        for prev, cur in zip(samples, samples[1:], strict=False):  # deliberately unequal lengths (pairwise)
-            dt = cur.ts - prev.ts
-            if dt <= 0 or prev.price <= 0 or cur.price <= 0:
-                continue
-            r = math.log(cur.price / prev.price)
-            sum_sq_returns += r * r
-            total_dt += dt
-
-        if total_dt <= 0:
+        # Sample the last price in each whole second, then take returns
+        # between those. Raw tick-to-tick returns badly underestimate vol here:
+        # Binance prints most trades in same-millisecond bursts (dt == 0), and
+        # skipping those pairs threw away the price changes inside them —
+        # measured live at ~3%/yr for BTC, making a 15bp move look like
+        # certainty. Same-second sampling is the standard fix.
+        last_per_sec: dict = {}
+        for s in samples:
+            if s.price > 0:
+                last_per_sec[int(s.ts)] = s.price
+        secs = sorted(last_per_sec)
+        if len(secs) < 2:
             return self._fallback_sigma_per_sqrt_sec
 
-        sigma = math.sqrt(sum_sq_returns / total_dt)
+        sum_sq_returns = sum(
+            math.log(last_per_sec[b] / last_per_sec[a]) ** 2
+            for a, b in zip(secs, secs[1:], strict=False)  # deliberately unequal lengths (pairwise)
+        )
+        sigma = math.sqrt(sum_sq_returns / (secs[-1] - secs[0]))
         return sigma if sigma > 0 else self._fallback_sigma_per_sqrt_sec
 
     def price_near(self, target_ts: float, tolerance: float = 5.0) -> float | None:
@@ -416,33 +421,6 @@ class HourlyStatsTracker:
         )
 
 
-def send_telegram_message(text: str, bot_token: str | None = None, chat_id: str | None = None) -> bool:
-    """Posts text to a Telegram chat via the Bot API. Reads credentials from
-    the arguments or, if omitted, TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env
-    vars. Returns False (and prints the text to stderr instead) if no
-    credentials are configured, OR if the API call itself fails (bad
-    token/chat id, network error, rate limit, etc.) — this is a
-    best-effort notification, never worth crashing the caller's trading
-    loop over."""
-    bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
-    if not bot_token or not chat_id:
-        print(
-            "Telegram not configured (set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID); printing summary instead:\n" + text,
-            file=sys.stderr,
-        )
-        return False
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    try:
-        resp = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=10)
-        resp.raise_for_status()
-        return True
-    except requests.RequestException as e:
-        print(f"Telegram send failed ({e}); printing summary instead:\n{text}", file=sys.stderr)
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Live wiring: Binance trade stream + Polymarket btc-updown-5m market
 # ---------------------------------------------------------------------------
@@ -509,7 +487,7 @@ async def stats_flush_loop(
     while True:
         summary = engine.stats.maybe_flush()
         if summary is not None:
-            sent = send_telegram_message(summary, telegram_token, telegram_chat_id)
+            sent = notify.send_telegram_message(summary, telegram_token, telegram_chat_id)
             if sent:
                 print("hourly summary sent to Telegram", file=sys.stderr)
         await asyncio.sleep(check_interval)

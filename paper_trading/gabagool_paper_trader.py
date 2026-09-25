@@ -18,9 +18,7 @@ position/settlement shape (deterministic profit, not outcome-dependent).
 
 PAPER TRADING ONLY. There is no --live flag and no order-signing path here
 by design (see gabagool_strategy.py's "Leg risk" note) — real execution of a
-two-leg arbitrage can't be made atomic through this repo's existing
-single-order submission path (order_executor.py signs and posts one order at
-a time), and a single-leg fill is directional exposure, which defeats the
+two-leg arbitrage can't be made atomic with single-order submission, and a single-leg fill is directional exposure, which defeats the
 entire point of this strategy. If live execution is wanted later, that's a
 separate, deliberate piece of work — build and test the fill logic here
 first.
@@ -252,7 +250,7 @@ async def stats_flush_loop(trader: GabagoolPaperTrader, telegram_token, telegram
     configured — much simpler than the other bots' HourlyStatsTracker since
     there's no probability/edge distribution to summarize, just counts and a
     running total."""
-    import oracle_lag_strategy as strat  # generic send_telegram_message only — see docstring
+    import notify
 
     while True:
         await asyncio.sleep(interval)
@@ -266,7 +264,7 @@ async def stats_flush_loop(trader: GabagoolPaperTrader, telegram_token, telegram
             f"Total fees paid: ${s['total_fees_paid']:.3f}\n"
             f"Open positions: {len(trader.state['open_positions'])}"
         )
-        strat.send_telegram_message(summary, telegram_token, telegram_chat_id)
+        notify.send_telegram_message(summary, telegram_token, telegram_chat_id)
 
 
 async def run(args):

@@ -157,7 +157,10 @@ async def stream_prices(
     def start_fallback():
         nonlocal fallback_task
         if rest_fallback and fallback_task is None:
-            print(f"websocket down after {consecutive_failures} attempt(s); starting REST fallback polling", file=sys.stderr)
+            print(
+                f"websocket down after {consecutive_failures} attempt(s); starting REST fallback polling",
+                file=sys.stderr,
+            )
             fallback_task = asyncio.ensure_future(rest_poll_loop(symbol, rest_poll_interval, on_tick))
 
     async def stop_fallback():
@@ -199,37 +202,62 @@ async def stream_prices(
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--symbol", default="btcusdt", help="Trading pair, lowercase (default: btcusdt)")
-    parser.add_argument("--stream", choices=["trade", "bookTicker", "kline"], default="trade", help="Which Binance stream to subscribe to (default: trade)")
+    parser.add_argument(
+        "--stream",
+        choices=["trade", "bookTicker", "kline"],
+        default="trade",
+        help="Which Binance stream to subscribe to (default: trade)",
+    )
     parser.add_argument("--interval", default="1m", help="Kline interval, only used with --stream kline (default: 1m)")
-    parser.add_argument("--json", action="store_true", help="Print newline-delimited JSON instead of human-readable text")
-    parser.add_argument("--no-rest-fallback", dest="rest_fallback", action="store_false", help="Disable the REST polling fallback when the websocket is down")
-    parser.add_argument("--rest-fallback-after", type=int, default=2, help="Consecutive websocket failures before REST fallback polling kicks in (default: 2)")
-    parser.add_argument("--rest-poll-interval", type=float, default=2.0, help="Seconds between REST fallback polls (default: 2.0)")
+    parser.add_argument(
+        "--json", action="store_true", help="Print newline-delimited JSON instead of human-readable text"
+    )
+    parser.add_argument(
+        "--no-rest-fallback",
+        dest="rest_fallback",
+        action="store_false",
+        help="Disable the REST polling fallback when the websocket is down",
+    )
+    parser.add_argument(
+        "--rest-fallback-after",
+        type=int,
+        default=2,
+        help="Consecutive websocket failures before REST fallback polling kicks in (default: 2)",
+    )
+    parser.add_argument(
+        "--rest-poll-interval", type=float, default=2.0, help="Seconds between REST fallback polls (default: 2.0)"
+    )
     args = parser.parse_args()
 
     def on_tick(tick: Tick):
         if args.json:
-            print(json.dumps({
-                "kind": tick.kind,
-                "symbol": tick.symbol,
-                "event_time_ms": tick.event_time_ms,
-                **tick.data,
-            }))
+            print(
+                json.dumps(
+                    {
+                        "kind": tick.kind,
+                        "symbol": tick.symbol,
+                        "event_time_ms": tick.event_time_ms,
+                        **tick.data,
+                    }
+                )
+            )
         else:
             print(format_tick(tick))
         sys.stdout.flush()
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    task = loop.create_task(stream_prices(
-        args.symbol,
-        args.stream,
-        args.interval,
-        on_tick,
-        rest_fallback=args.rest_fallback,
-        rest_fallback_after=args.rest_fallback_after,
-        rest_poll_interval=args.rest_poll_interval,
-    ))
+    task = loop.create_task(
+        stream_prices(
+            args.symbol,
+            args.stream,
+            args.interval,
+            on_tick,
+            rest_fallback=args.rest_fallback,
+            rest_fallback_after=args.rest_fallback_after,
+            rest_poll_interval=args.rest_poll_interval,
+        )
+    )
 
     def shutdown(*_):
         task.cancel()

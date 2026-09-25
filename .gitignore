@@ -2,11 +2,6 @@
 .env
 !.env.example
 
-# createwallet/*.txt is where create_polygon_wallet.py's --save-plaintext
-# option writes raw private keys/mnemonics — never commit these
-createwallet/*.txt
-createwallet/*keystore*.json
-
 *.pem
 *.key
 
@@ -41,31 +36,13 @@ paper_trading/paper_trader_v3.pid
 paper_trading/paper_trader_v3.autorestart.json
 paper_trading/perf_logs_v3/
 
-# live_trading/ runtime state — generated locally, not source
-live_trading/live_state.json
-live_trading/live_state.tmp
-live_trading/live_trades.jsonl
-live_trading/live_trader.pid
-live_trading/live_trader.autorestart.json
-live_trading/perf_logs/
-
-# live_trading/live_trader.py --v2 runtime state, if run alongside v1 with
-# distinct --state-file/--trades-log/--pid-file — generated locally, not source
-live_trading/live_state_v2.json
-live_trading/live_state_v2.tmp
-live_trading/live_trades_v2.jsonl
-live_trading/live_trader_v2.pid
-live_trading/live_trader_v2.autorestart.json
-live_trading/perf_logs_v2/
-
-# live_trading/live_trader.py --v3 runtime state, if run alongside v1/v2 with
-# distinct --state-file/--trades-log/--pid-file — generated locally, not source
-live_trading/live_state_v3.json
-live_trading/live_state_v3.tmp
-live_trading/live_trades_v3.jsonl
-live_trading/live_trader_v3.pid
-live_trading/live_trader_v3.autorestart.json
-live_trading/perf_logs_v3/
+# paper_trading/paper_trader.py --early runtime state — generated locally, not source
+paper_trading/paper_state_early.json
+paper_trading/paper_state_early.tmp
+paper_trading/paper_trades_early.jsonl
+paper_trading/paper_trader_early.pid
+paper_trading/paper_trader_early.autorestart.json
+paper_trading/perf_logs_early/
 
 # experiments/trend_paper_trader.py runtime state — generated locally, not source
 experiments/trend_paper_state.json
@@ -74,6 +51,9 @@ experiments/trend_paper_trades.jsonl
 experiments/trend_paper_trader.pid
 experiments/trend_paper_trader.autorestart.json
 experiments/perf_logs/
+
+# web_dashboard.py Reset archives old runs here — generated locally, not source
+paper_trading/archive/
 
 # watchdog.py runtime state (root) — generated locally, not source
 watchdog.pid

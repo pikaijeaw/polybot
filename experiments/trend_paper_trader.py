@@ -23,7 +23,7 @@ written against for oracle_lag_strategy.OracleLagEngine — see
 trend_strategy.py's docstring.
 
 Everything else about this bot is independent on purpose, the same way
-paper_trader.py and live_trader.py are independent of each other: its own
+paper_trader.py's v1/v2/v3 runs are independent of each other: its own
 state file, trades log, perf_logs directory, and pidfile, all living in this
 experiments/ directory. It can run at the same time as
 paper_trading/paper_trader.py without any interference — that's the point,

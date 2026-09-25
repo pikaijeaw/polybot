@@ -4,10 +4,8 @@ Paper trading bot — no dashboard in this process, by design.
 
 Runs the exact same live pipeline as oracle_lag_strategy.py --live (real
 Binance prices, real Polymarket btc-updown-5m quotes, real Brownian
-probability + Kelly sizing) but instead of routing signals to
-order_executor.py, it simulates fills against a virtual bankroll — no wallet,
-no CLOB auth, no funds at risk. It's the thing to run for days before you
-ever point order_executor.py at real money.
+probability + Kelly sizing) but simulates fills against a virtual bankroll —
+no wallet, no CLOB auth, no funds at risk.
 
 This process only trades — it doesn't serve a web UI. Run
 web_dashboard.py separately (a different process) to monitor it; that
@@ -22,7 +20,7 @@ window's close time passes, the position is settled by polling Polymarket's
 own Gamma API for the resolved outcome (outcomePrices) — the authoritative
 source, since it reflects the actual Chainlink-based resolution rather than
 our own approximation. If Gamma hasn't resolved it within
-SETTLE_FALLBACK_AFTER (120s; resolution is sometimes not instant), we fall
+SETTLE_FALLBACK_AFTER (1 hour; real resolution typically lands 6-10+ min after close), we fall
 back to comparing the last known price to the window's anchor, clearly
 flagged as a fallback in the log.
 
@@ -56,6 +54,12 @@ Usage (run from anywhere — paths resolve relative to this script):
         # the live paper equity (compounds as the bankroll grows/shrinks) instead of the fixed
         # --bankroll value v1/v2 size against for the whole run. Same distinct-files requirement as
         # --v2 above, and mutually exclusive with it.
+    python paper_trading/paper_trader.py --early --stake-usd 5 \
+        --state-file paper_state_early.json --trades-log paper_trades_early.jsonl \
+        --pid-file paper_trader_early.pid --autorestart-marker paper_trader_early.autorestart.json \
+        --perf-log-dir perf_logs_early
+        # --early swaps in early_move_strategy.EarlyMoveEngine — early entries on a clear move only,
+        # fixed stake (see that module's docstring). Same distinct-files requirement as --v2/--v3.
 """
 
 import argparse
@@ -79,6 +83,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import btc_5m_market_finder as finder
 import btc_price_feed as price_feed
+import early_move_strategy  # only constructed when --early is passed — see run()
+import notify
 import oracle_lag_strategy as strategy
 import oracle_lag_strategy_v2 as strategy_v2  # only constructed when --v2 is passed — see run()
 import oracle_lag_strategy_v3 as strategy_v3  # only constructed when --v3 is passed — see run()
@@ -90,7 +96,10 @@ DEFAULT_TRADES_LOG_PATH = SCRIPT_DIR / "paper_trades.jsonl"
 DEFAULT_PERF_LOG_DIR = SCRIPT_DIR / "perf_logs"
 DEFAULT_PID_PATH = SCRIPT_DIR / "paper_trader.pid"
 DEFAULT_AUTORESTART_MARKER = SCRIPT_DIR / "paper_trader.autorestart.json"
-SETTLE_FALLBACK_AFTER = 120.0  # seconds past window close before trusting our own price-based guess
+# Seconds past window close before trusting our own price-based guess. Gamma's real
+# (Chainlink/UMA) resolution was measured landing 6-10+ min after close, so a short wait
+# here silently turns nearly every settlement into a guess.
+SETTLE_FALLBACK_AFTER = 3600.0
 
 
 # ---------------------------------------------------------------------------
@@ -428,9 +437,16 @@ async def market_and_settlement_loop(trader: PaperTrader, poll_interval: float):
                 (m for m in markets if m.status == "UPCOMING"), None
             )
 
-            if live_market is not None and live_market.best_bid is not None and live_market.best_ask is not None:
-                up_ask = live_market.best_ask
-                down_ask = 1.0 - live_market.best_bid
+            up_ask = down_ask = None
+            if live_market is not None:
+                # Real CLOB asks for each side's own token — Gamma's bestAsk lags the book,
+                # and 1 - up_bid is only an approximation of what Down actually costs.
+                # ponytail: top-of-book only, no depth walk — fine while stakes are far below top-level size.
+                up_ask, down_ask = await asyncio.gather(
+                    asyncio.to_thread(finder.fetch_best_ask, session, live_market.token_up),
+                    asyncio.to_thread(finder.fetch_best_ask, session, live_market.token_down),
+                )
+            if up_ask is not None and down_ask is not None:
                 pos = trader.process_market_update(live_market.slug, live_market.epoch, up_ask, down_ask)
                 if pos is not None:
                     print(
@@ -457,7 +473,7 @@ async def stats_flush_loop(trader: PaperTrader, telegram_token, telegram_chat_id
                     f"trades={s['trades']} win_rate={(s['win_rate'] or 0) * 100:.1f}%  "
                     f"realized_pnl=${s['realized_pnl']:+.2f}"
                 )
-                strategy.send_telegram_message(summary + portfolio_line, telegram_token, telegram_chat_id)
+                notify.send_telegram_message(summary + portfolio_line, telegram_token, telegram_chat_id)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -468,7 +484,18 @@ async def stats_flush_loop(trader: PaperTrader, telegram_token, telegram_chat_id
 
 
 async def run(args):
-    if args.v3:
+    if args.early:
+        engine = early_move_strategy.EarlyMoveEngine(
+            stake_usd=args.stake_usd,
+            min_z=args.min_z,
+            max_price=args.max_price,
+            min_elapsed=args.early_min_elapsed,
+            max_elapsed=args.early_max_elapsed,
+            min_edge=args.min_edge,
+            vol_window_seconds=args.vol_window,
+            fallback_sigma_annual=args.fallback_sigma_annual,
+        )
+    elif args.v3:
         engine = strategy_v3.OracleLagEngineV3(
             bankroll_usd=args.bankroll,
             kelly_multiplier=args.kelly_multiplier,
@@ -573,6 +600,35 @@ def main():
         "--bankroll, so stakes compound as equity grows/shrinks. Mutually exclusive with --v2; point "
         "--state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir at files distinct from any "
         "concurrent v1/v2 run.",
+    )
+    version_group.add_argument(
+        "--early",
+        action="store_true",
+        help="Use early_move_strategy.EarlyMoveEngine — enters in the first ~90s of a window only on a clear "
+        "move away from the anchor (--min-z), fixed --stake-usd per trade (no Kelly, never scales up). Same "
+        "distinct-files requirement as --v2/--v3.",
+    )
+    ed = early_move_strategy
+    parser.add_argument(
+        "--stake-usd", type=float, default=ed.DEFAULT_STAKE_USD, help="(--early only) Fixed stake per trade"
+    )
+    parser.add_argument(
+        "--min-z", type=float, default=ed.DEFAULT_MIN_Z, help="(--early only) Min move vs anchor, in sigmas"
+    )
+    parser.add_argument(
+        "--max-price", type=float, default=ed.DEFAULT_MAX_PRICE, help="(--early only) Don't buy above this ask"
+    )
+    parser.add_argument(
+        "--early-min-elapsed",
+        type=float,
+        default=ed.DEFAULT_MIN_ELAPSED,
+        help="(--early only) Earliest entry, seconds after open",
+    )
+    parser.add_argument(
+        "--early-max-elapsed",
+        type=float,
+        default=ed.DEFAULT_MAX_ELAPSED,
+        help="(--early only) Latest entry, seconds after open",
     )
     parser.add_argument(
         "--min-prob",

@@ -152,11 +152,19 @@ def fetch_order_book(session: requests.Session, token_id: str) -> dict:
     return resp.json()
 
 
+def fetch_best_ask(session: requests.Session, token_id: str) -> float | None:
+    """Lowest ask on the live CLOB book — what a buy would actually pay right
+    now. Gamma's bestAsk lags the real book, so paper fills use this instead.
+    min() rather than asks[0]: /book returns asks sorted descending."""
+    asks = fetch_order_book(session, token_id).get("asks") or []
+    return min((float(a["price"]) for a in asks), default=None)
+
+
 def resolve_market_outcome(session: requests.Session, slug: str) -> str | None:
     """Looks up whether a market has resolved and, if so, which side won, by
     reading Gamma's own outcomePrices for it. Returns "UP", "DOWN", or None
-    if not resolved yet (or not found). Shared by paper_trader.py and
-    live_trader.py so both settle against the exact same logic.
+    if not resolved yet (or not found). Shared by every paper
+    bot so they all settle against the exact same logic.
 
     Passing closed=true is required, not optional: Gamma's default
     /markets?slug= query only serves markets that are still active and

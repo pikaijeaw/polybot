@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Watchdog for the trading bots: polls whether each bot that's supposed to be
-running (paper_trader.py and/or live_trading/live_trader.py) is actually
-alive, and if it has gone down unexpectedly, restarts it with its last-known
+Watchdog for the paper bot: polls whether paper_trader.py, if it's supposed
+to be running, is actually alive, and if it has gone down unexpectedly, restarts it with its last-known
 args and sends a Telegram alert. Reads TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
-from .env via oracle_lag_strategy.send_telegram_message — no separate
+from .env via notify.send_telegram_message — no separate
 config needed if those are already set.
 
 Telling "crashed" apart from "the user meant to stop this" is the whole
-point here, and it matters a lot more once --modes includes live (real
-money): resurrecting a bot the user deliberately stopped would be a
+point here: resurrecting a bot the user deliberately stopped would be a
 regression on the Stop button. Each bot writes a small marker file on
 startup (via pidfile.write_autorestart_marker) and clears it ONLY on its
 own graceful, signal-triggered shutdown (SIGINT/SIGTERM -> Ctrl+C or the
@@ -19,19 +17,17 @@ dashboard's Stop button) — never on a crash. So:
     marker absent                  -> intentionally stopped, leave it down
 
 This is its own independent process (with its own pidfile), consistent
-with paper_trader.py / web_dashboard.py / live_trader.py all being
-independent — a watchdog crash shouldn't take a trading bot down, and a
+with paper_trader.py / web_dashboard.py being independent — a watchdog crash shouldn't take a trading bot down, and a
 bot's ability to be resurrected shouldn't depend on the dashboard being up.
 
 Restart-loop protection: if a bot keeps crashing immediately after each
-restart (broken environment, revoked approval, whatever), --max-restarts-
+restart (broken environment, whatever), --max-restarts-
 per-hour caps how many times this watchdog will retry per bot before it
 gives up and sends a single "needs manual attention" alert instead of
-restart-spamming Telegram and the CLOB.
+restart-spamming Telegram.
 
 Usage:
-    python watchdog.py                            # watch both paper and live, 30s interval
-    python watchdog.py --modes paper               # only watch paper
+    python watchdog.py                            # watch paper, 30s interval
     python watchdog.py --check-interval 15 --max-restarts-per-hour 3
 """
 
@@ -45,7 +41,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import oracle_lag_strategy as strategy  # noqa: E402 - reuse send_telegram_message, no duplicated logic
+import notify  # noqa: E402
 import pidfile  # noqa: E402
 
 DEFAULT_PID_PATH = PROJECT_ROOT / "watchdog.pid"
@@ -57,18 +53,11 @@ BOTS = {
         "marker": PROJECT_ROOT / "paper_trading" / "paper_trader.autorestart.json",
         "log": PROJECT_ROOT / "paper_trading" / "bot.log",
     },
-    "live": {
-        "script": PROJECT_ROOT / "live_trading" / "live_trader.py",
-        "pidfile": PROJECT_ROOT / "live_trading" / "live_trader.pid",
-        "marker": PROJECT_ROOT / "live_trading" / "live_trader.autorestart.json",
-        "log": PROJECT_ROOT / "live_trading" / "bot.log",
-    },
 }
 
 
 class RestartTracker:
-    """Sliding-window restart-count limiter, same shape as live_trader.py's
-    RateLimiter — caps how many times we'll auto-restart a given bot within
+    """Sliding-window restart-count limiter — caps how many times we'll auto-restart a given bot within
     a rolling window before giving up on it."""
 
     def __init__(self, max_restarts: int, window_seconds: float = 3600.0):
@@ -91,7 +80,7 @@ class RestartTracker:
 
 
 def restart_bot(mode: str, info: dict, argv: list, spawned: dict) -> int:
-    proc_args = [sys.executable, str(info["script"]), *argv]
+    proc_args = [sys.executable, "-u", str(info["script"]), *argv]  # -u: bot.log written live, not block-buffered
     info["log"].parent.mkdir(parents=True, exist_ok=True)
     with open(info["log"], "a") as log_f:
         proc = subprocess.Popen(proc_args, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(PROJECT_ROOT))
@@ -117,7 +106,7 @@ def check_and_restart(mode: str, info: dict, tracker: RestartTracker, gave_up: s
     # marker present but pidfile shows no live process -> went down unexpectedly
     if not tracker.allowed():
         if mode not in gave_up:
-            strategy.send_telegram_message(
+            notify.send_telegram_message(
                 f"⚠️ PolyBot watchdog: {mode} bot keeps crashing "
                 f"(restart limit reached, last known pid {pid}). NOT restarting again — needs manual attention."
             )
@@ -131,7 +120,7 @@ def check_and_restart(mode: str, info: dict, tracker: RestartTracker, gave_up: s
         f"[{time.strftime('%H:%M:%S')}] {mode} bot was down (pid {pid} not alive) — restarted as pid {new_pid}",
         file=sys.stderr,
     )
-    strategy.send_telegram_message(
+    notify.send_telegram_message(
         f"\U0001f504 PolyBot watchdog: {mode} bot was down (pid {pid} not alive) — restarted automatically (new pid {new_pid})."
     )
 
@@ -154,8 +143,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--modes",
-        default="paper,live",
-        help="Comma-separated list of bots to watch: paper, live, or both (default: paper,live)",
+        default="paper",
+        help="Comma-separated list of bots to watch (default: paper)",
     )
     parser.add_argument(
         "--check-interval", type=float, default=30.0, help="Seconds between liveness checks (default: 30)"

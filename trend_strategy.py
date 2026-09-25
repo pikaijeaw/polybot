@@ -31,7 +31,7 @@ this repo's own indicator math alone. Also unbacktested; that's what
 
 Reuses oracle_lag_strategy.py's KellySizer, MarketWindow, HourlyStatsTracker,
 RollingVolatilityEstimator (only for its price_near() anchor lookup),
-WINDOW_SECONDS, and send_telegram_message rather than duplicating them —
+and WINDOW_SECONDS rather than duplicating them —
 TrendConfirmEngine only replaces the probability model. It implements the
 exact same on_price_tick(...)/set_market(...)/compute(...)/evaluate(...)
 interface (and the same 5-tuple shape from compute()) as OracleLagEngine,
@@ -58,6 +58,7 @@ from tradingview_ta import TA_Handler
 
 import btc_5m_market_finder as finder
 import btc_price_feed as price_feed
+import notify
 import oracle_lag_strategy as strategy
 
 
@@ -451,7 +452,7 @@ async def stats_flush_loop(engine: TrendConfirmEngine, telegram_token, telegram_
     while True:
         summary = engine.stats.maybe_flush()
         if summary is not None:
-            sent = strategy.send_telegram_message(summary, telegram_token, telegram_chat_id)
+            sent = notify.send_telegram_message(summary, telegram_token, telegram_chat_id)
             if sent:
                 print("hourly summary sent to Telegram", file=sys.stderr)
         await asyncio.sleep(check_interval)

@@ -5,7 +5,7 @@ and Kelly sizing as oracle_lag_strategy.py, with three additional entry
 filters ported from a reference implementation
 (github.com/JLowo/gengar_polymarket_bot) that hardens entry discipline on
 the same edge. Reuses v1's RollingVolatilityEstimator, brownian_probability_up,
-KellySizer, MarketWindow, HourlyStatsTracker, and send_telegram_message
+KellySizer, MarketWindow, and HourlyStatsTracker
 directly by import rather than duplicating them — the probability/Kelly math
 is identical between v1 and v2; only what qualifies as a tradeable signal
 changes. Kept as a separate, parallel engine rather than an in-place change
@@ -62,6 +62,7 @@ import requests
 
 import btc_5m_market_finder as finder
 import btc_price_feed as price_feed
+import notify
 import oracle_lag_strategy as v1
 
 WINDOW_SECONDS = v1.WINDOW_SECONDS
@@ -85,8 +86,7 @@ class OracleLagEngineV2:
     """Same on_price_tick(...)/set_market(...)/compute(...)/evaluate(...)
     interface as v1.OracleLagEngine (and the same 5-tuple shape from
     compute()) — a drop-in for anything written against that interface,
-    e.g. paper_trading/paper_trader.py's PaperTrader and
-    live_trading/live_trader.py's LiveTrader (both --v2-selectable)."""
+    e.g. paper_trading/paper_trader.py's PaperTrader (--v2-selectable)."""
 
     def __init__(
         self,
@@ -257,7 +257,7 @@ async def stats_flush_loop(
     while True:
         summary = engine.stats.maybe_flush()
         if summary is not None:
-            sent = v1.send_telegram_message(summary, telegram_token, telegram_chat_id)
+            sent = notify.send_telegram_message(summary, telegram_token, telegram_chat_id)
             if sent:
                 print("hourly summary sent to Telegram", file=sys.stderr)
         await asyncio.sleep(check_interval)

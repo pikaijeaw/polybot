@@ -13,21 +13,14 @@ paper_trader.py's state, it just watches:
     ORDERS     Open and recently-closed paper positions, win rate, realized
                P&L — from paper_trader.py's state file.
 
-    WALLET     Paper bankroll/equity always; PLUS real on-chain POL (at your
-               EOA) and pUSD (at your Deposit Wallet — a smart-contract
-               wallet derived from your EOA, not the EOA itself; see
-               CLAUDE.md's "Collateral and the CLOB SDK" section) for
-               POLYMARKET_PRIVATE_KEY's address if one is configured (.env),
-               refreshed on a slower cadence. Only ever reads public chain
-               state — no order placement.
+    WALLET     Paper bankroll/equity.
 
 Run it alongside paper_trader.py in a separate terminal:
 
     python paper_trading/paper_trader.py            # terminal 1: the bot
     python paper_trading/dashboard.py                # terminal 2: the monitor
 
-It degrades gracefully with no paper_trader.py running (shows "no data yet")
-and with no wallet configured (shows "not configured").
+It degrades gracefully with no paper_trader.py running (shows "no data yet").
 
 Usage (run from anywhere — paths resolve relative to this script):
     python paper_trading/dashboard.py
@@ -37,39 +30,20 @@ Usage (run from anywhere — paths resolve relative to this script):
 
 import argparse
 import json
-import os
 import time
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from web3 import Web3
 
-# This script lives in paper_trading/ but .env lives in the project root.
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-load_dotenv(PROJECT_ROOT / ".env")
 
 DEFAULT_STATE_PATH = SCRIPT_DIR / "paper_state.json"
-DEFAULT_RPC_URL = "https://polygon-bor-rpc.publicnode.com"
-COLLATERAL_DECIMALS = 6
-WALLET_REFRESH_SECONDS = 30.0
 PRICE_REFRESH_SECONDS = 2.0
-
-ERC20_ABI = [
-    {
-        "constant": True,
-        "inputs": [{"name": "_owner", "type": "address"}],
-        "name": "balanceOf",
-        "outputs": [{"name": "balance", "type": "uint256"}],
-        "type": "function",
-    },
-]
 
 
 # ---------------------------------------------------------------------------
@@ -100,67 +74,6 @@ class LivePrice:
         except Exception as e:
             self.error = str(e)
         self._next_poll = time.time() + PRICE_REFRESH_SECONDS
-
-
-class WalletWatcher:
-    """Read-only on-chain balance check. Never signs an order, never submits
-    a transaction. Two addresses matter, not one: `eoa_address` is derived
-    locally from the private key; `address` is the Deposit Wallet -- a
-    smart-contract wallet derived from that EOA, not the EOA itself, which
-    is what actually holds pUSD and what the CLOB trades against (see
-    CLAUDE.md's "Collateral and the CLOB SDK" section). Deriving it needs a
-    real (read-only) SecureClient construction, done ONCE and cached in
-    _ensure_deposit_wallet() rather than on every refresh, since it's
-    deterministic for a given EOA and can never change."""
-
-    def __init__(self, rpc_url: str):
-        self.eoa_address: str | None = None
-        self.address: str | None = None
-        self.error: str | None = None
-        self.pol_balance: float | None = None
-        self.pusd_balance: float | None = None
-        self._next_poll = 0.0
-        self._private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
-        self._pusd_contract = None
-
-        if self._private_key:
-            try:
-                from eth_account import Account
-
-                self.eoa_address = Account.from_key(self._private_key).address
-            except Exception as e:
-                self.error = f"bad POLYMARKET_PRIVATE_KEY: {e}"
-
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
-
-    def _ensure_deposit_wallet(self):
-        if self.address is not None or self._private_key is None:
-            return
-        from polymarket import SecureClient
-
-        client = SecureClient.create(private_key=self._private_key)
-        try:
-            self.address = client.wallet
-            self._pusd_contract = self.w3.eth.contract(
-                address=Web3.to_checksum_address(client.environment.collateral_token), abi=ERC20_ABI
-            )
-        finally:
-            client.close()
-
-    def maybe_refresh(self):
-        if self.eoa_address is None or time.time() < self._next_poll:
-            return
-        try:
-            self._ensure_deposit_wallet()
-            self.pol_balance = self.w3.eth.get_balance(Web3.to_checksum_address(self.eoa_address)) / 10**18
-            self.pusd_balance = (
-                self._pusd_contract.functions.balanceOf(Web3.to_checksum_address(self.address)).call()
-                / 10**COLLATERAL_DECIMALS
-            )
-            self.error = None
-        except Exception as e:
-            self.error = str(e)
-        self._next_poll = time.time() + WALLET_REFRESH_SECONDS
 
 
 def load_paper_state(state_path: Path) -> dict | None:
@@ -284,7 +197,7 @@ def render_orders_panel(state: dict | None) -> Panel:
     return Panel(table, title=f"ORDERS  ({len(open_positions)} open)", border_style="yellow")
 
 
-def render_wallet_panel(state: dict | None, wallet: WalletWatcher) -> Panel:
+def render_wallet_panel(state: dict | None) -> Panel:
     lines = Text()
     lines.append("Paper wallet\n", style="bold")
     if state:
@@ -308,44 +221,25 @@ def render_wallet_panel(state: dict | None, wallet: WalletWatcher) -> Panel:
     else:
         lines.append("  no data yet — is paper_trader.py running?\n", style="dim")
 
-    lines.append("\nReal wallet (read-only)\n", style="bold")
-    if wallet.eoa_address is None:
-        reason = wallet.error or "POLYMARKET_PRIVATE_KEY not set in .env"
-        lines.append(f"  not configured ({reason})\n", style="dim")
-    else:
-        lines.append(f"  EOA: {wallet.eoa_address}\n", style="dim")
-        if wallet.address:
-            lines.append(f"  Deposit Wallet: {wallet.address}\n", style="dim")
-        if wallet.error:
-            lines.append(f"  error: {wallet.error}\n", style="red")
-        else:
-            pol_style = "green" if (wallet.pol_balance or 0) > 0.01 else "yellow"
-            pusd_style = "green" if (wallet.pusd_balance or 0) > 0 else "yellow"
-            lines.append("  POL: ", style="")
-            lines.append(f"{wallet.pol_balance:.4f}" if wallet.pol_balance is not None else "-", style=pol_style)
-            lines.append("   pUSD: ", style="")
-            lines.append(f"{wallet.pusd_balance:.4f}\n" if wallet.pusd_balance is not None else "-\n", style=pusd_style)
-
     return Panel(lines, title="WALLET", border_style="magenta")
 
 
-def render(state: dict | None, live_price: LivePrice, wallet: WalletWatcher) -> Layout:
+def render(state: dict | None, live_price: LivePrice) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="top", size=10),
         Layout(name="middle"),
-        Layout(name="bottom", size=11),
+        Layout(name="bottom", size=8),
     )
     layout["top"].update(render_price_panel(live_price, state))
     layout["middle"].update(render_orders_panel(state))
-    layout["bottom"].update(render_wallet_panel(state, wallet))
+    layout["bottom"].update(render_wallet_panel(state))
     return layout
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_PATH))
-    parser.add_argument("--rpc-url", default=DEFAULT_RPC_URL)
     parser.add_argument(
         "--refresh-interval", type=float, default=1.0, help="Screen redraw interval in seconds (default: 1.0)"
     )
@@ -353,14 +247,12 @@ def main():
 
     state_path = Path(args.state_file)
     live_price = LivePrice()
-    wallet = WalletWatcher(args.rpc_url)
 
     with Live(refresh_per_second=4, screen=True) as live:
         while True:
             live_price.maybe_refresh()
-            wallet.maybe_refresh()
             state = load_paper_state(state_path)
-            live.update(render(state, live_price, wallet))
+            live.update(render(state, live_price))
             time.sleep(args.refresh_interval)
 
 

@@ -2,7 +2,7 @@
 """
 Tiny PID-file helper for single-instance process protection.
 
-paper_trader.py and live_trader.py each claim a pidfile on startup and clean
+paper_trader.py claims a pidfile on startup and clean
 it up on normal exit. That lets web_dashboard.py answer "is this bot already
 running?" by checking whether the PID inside is still alive, without ever
 holding a live subprocess handle itself — a handle breaks the moment the

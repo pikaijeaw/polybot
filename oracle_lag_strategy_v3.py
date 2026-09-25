@@ -4,7 +4,7 @@ Oracle-lag strategy engine, v3: identical filters to oracle_lag_strategy_v2.py
 (min-edge + min-prob + safety-factor + entry-window) via subclassing
 OracleLagEngineV2 directly, with one behavioral change — Kelly sizing is
 computed off the *current* bankroll instead of the fixed --bankroll value
-v1/v2 use for the whole run. As paper_trader.py/live_trader.py's tracked
+v1/v2 use for the whole run. As paper_trader.py's tracked
 equity grows or shrinks, position sizes compound with it instead of staying
 pinned to the number the process was started with.
 
@@ -14,7 +14,7 @@ comparison, and v3 can be A/B'd against both via paper_trader.py's
 --v2/--v3 flags.
 
 How the current bankroll is supplied: OracleLagEngineV3 does NOT read any
-wallet/ledger itself. The caller (paper_trader.py, live_trader.py) wires a
+wallet/ledger itself. The caller (paper_trader.py) wires a
 zero-arg `bankroll_provider` callback via set_bankroll_provider() *after*
 constructing both the engine and the trader, since the trader's constructor
 needs the already-built engine (a construction-order chicken-and-egg that
@@ -23,7 +23,7 @@ current ABSOLUTE total bankroll (e.g. PaperTrader.equity(), which is cash +
 value of open positions), not a delta/pnl figure — a delta approach would
 need to be added to a stored "initial bankroll" every call, and stays
 correct only if the caller's realized-pnl bookkeeping is itself unbounded.
-It isn't, in this repo: PaperTrader/LiveTrader.stats()['realized_pnl'] is
+It isn't, in this repo: PaperTrader.stats()['realized_pnl'] is
 summed from an in-memory closed-positions list that, on process restart, is
 rebuilt only from the capped `recent_closed` tail (last 25) in the state
 file — so a delta fed by that figure would silently understate the true

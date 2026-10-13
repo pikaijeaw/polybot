@@ -137,9 +137,19 @@
     <h2>BTC Price</h2>
     <div id="price-content"><div class="empty">Loading…</div></div>
   </div>
+  <div class="panel">
+    <h2>Watchdog</h2>
+    <div class="bot-status-line"><span class="bot-dot" id="watchdog-dot"></span><span id="watchdog-status-text">checking…</span></div>
+    <div class="bot-actions">
+      <button class="btn" id="watchdog-start-btn" onclick="watchdogAction('start')">Start</button>
+      <button class="btn stop" id="watchdog-stop-btn" onclick="watchdogAction('stop')">Stop</button>
+      <button class="btn danger" onclick="killSwitch()">KILL SWITCH — stop &amp; reset all</button>
+    </div>
+    <div class="bot-msg" id="watchdog-msg"></div>
+  </div>
 </div>
 
-<h1 class="section-title">Oracle-Lag v1 / v2 / v3 + Early-Move — paper trading</h1>
+<h1 class="section-title">Oracle-Lag v1 / v2 / v3 + Early-Move + Arbitrage + Copy — paper trading</h1>
 <div class="strategies-grid">
 
   <div class="bot-panel paper-panel">
@@ -264,6 +274,63 @@
     <div class="dim" style="font-size:10.5px;margin-top:4px;">Stake never scales with bankroll. Skips any window with no clear early move, or when the bot started mid-window.</div>
   </div>
 
+  <div class="bot-panel paper-panel">
+    <h3>Arbitrage (Pair Cost)<span class="sub">5m — legs into Up and Down separately so avg Up + avg Down (fees incl.) stays under $1</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="arb-dot"></span><span id="arb-status-text">checking…</span></div>
+    <div id="arb-engine"></div>
+    <div id="arb-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn" href="/api/report.csv?strategy=arb" download>CSV</a></div>
+    <div id="arb-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label>Bankroll ($)<input type="number" id="arb-bankroll" value="50" step="1"></label>
+      <label>Clip per leg ($)<input type="number" id="arb-clip-usd" value="5" step="0.5"></label>
+      <label>Open leg at ask ≤<input type="number" id="arb-entry-price" value="0.45" step="0.01"></label>
+      <label>Min margin under $1<input type="number" id="arb-min-margin" value="0.01" step="0.005"></label>
+      <label>Max per window ($)<input type="number" id="arb-max-window-usd" value="20" step="1"></label>
+      <label>No new leg in last (s)<input type="number" id="arb-min-seconds-remaining" value="60" step="5"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn" id="arb-start-btn" onclick="startBot('arb')">Start</button>
+      <button class="btn stop" id="arb-stop-btn" onclick="stopBot('arb')">Stop</button>
+      <button class="btn danger" id="arb-reset-btn" onclick="showResetConfirm('arb')">Reset</button>
+    </div>
+    <div class="confirm-row" id="arb-reset-confirm-row" style="display:none;">
+      <input type="text" id="arb-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('arb')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('arb')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="arb-msg"></div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;">Side shows shares held (U/D); Entry is the pair cost once both legs exist. A leg that never gets hedged settles as a plain directional bet — at most one clip is unhedged at a time. Settles on Polymarket's own resolution, ~6-10 min after close.</div>
+  </div>
+
+  <div class="bot-panel paperv2-panel">
+    <h3>Copy Trading<span class="sub">any market — mirrors one Polymarket account's trades, scaled down, at live prices</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="copy-dot"></span><span id="copy-status-text">checking…</span></div>
+    <div id="copy-engine"></div>
+    <div id="copy-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn v2" href="/api/report.csv?strategy=copy" download>CSV</a></div>
+    <div id="copy-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label style="grid-column: 1 / -1;">Account (username, profile URL or 0x wallet)<input type="text" id="copy-follow" value="gabagool22"></label>
+      <label>Bankroll ($)<input type="number" id="copy-bankroll" value="50" step="1"></label>
+      <label>Our shares per their share<input type="number" id="copy-ratio" value="0.05" step="0.01"></label>
+      <label>Max per market ($)<input type="number" id="copy-max-market-usd" value="10" step="1"></label>
+      <label>Max slippage vs their price<input type="number" id="copy-max-slippage" value="0.02" step="0.01"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn v2" id="copy-start-btn" onclick="startBot('copy')">Start</button>
+      <button class="btn stop" id="copy-stop-btn" onclick="stopBot('copy')">Stop</button>
+      <button class="btn danger" id="copy-reset-btn" onclick="showResetConfirm('copy')">Reset</button>
+    </div>
+    <div class="confirm-row" id="copy-reset-confirm-row" style="display:none;">
+      <input type="text" id="copy-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('copy')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('copy')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="copy-msg"></div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;">Copies only trades made after Start. Fills at the live ask/bid when the trade is seen, not at their price; skipped when the price has moved past the slippage limit. If it stops right after Start, the account name was not found — see bot_copy.log.</div>
+  </div>
+
 </div>
 
 <footer>Read-only monitor (except explicit Reset/Start/Stop actions) · polls /api/data every 1.5s</footer>
@@ -320,8 +387,13 @@ function renderDirectionalPanel(mode, state) {
   let eHtml = "";
   if (engine) {
     const approx = engine.anchor_is_approximate ? "~" : "";
-    eHtml += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug || "-")}</span></div>`;
-    eHtml += `<div class="row"><span class="label">Anchor / closes in</span><span class="value">${approx}${fmtNum(engine.anchor_price)} · ${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
+    if (engine.market_slug) eHtml += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug)}</span></div>`;
+    if (engine.rows) {
+      // Bots with no anchor/edge model (arb, copy) send ready-made [label, value] rows instead.
+      for (const [label, value] of engine.rows) eHtml += `<div class="row"><span class="label">${esc(label)}</span><span class="value">${esc(value)}</span></div>`;
+    } else {
+      eHtml += `<div class="row"><span class="label">Anchor / closes in</span><span class="value">${approx}${fmtNum(engine.anchor_price)} · ${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
+    }
     if (engine.up_edge !== null && engine.up_edge !== undefined) {
       const upCls = engine.up_edge > 0 ? "pos" : "neg";
       const downCls = (engine.down_edge || 0) > 0 ? "pos" : "neg";
@@ -353,7 +425,8 @@ function renderDirectionalPanel(mode, state) {
   const now = Date.now() / 1000;
   for (const p of open) {
     const remaining = p.end_epoch - now;
-    rows += `<tr><td><span class="badge OPEN">OPEN</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td>T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s</td></tr>`;
+    const tRem = p.end_epoch ? `T${remaining >= 0 ? "+" : ""}${remaining.toFixed(0)}s` : "-";  // copy bot: no known close time
+    rows += `<tr><td><span class="badge OPEN">OPEN</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td>${tRem}</td></tr>`;
   }
   for (const p of closed.slice(0, 10)) {
     rows += `<tr><td><span class="badge ${p.status}">${esc(p.status)}</span></td><td>${esc(p.side)}</td><td>${fmtNum(p.entry_price, 3)}</td><td>${fmtMoney(p.stake_usd)}</td><td class="${(p.pnl_usd || 0) >= 0 ? 'pos' : 'neg real'}">${fmtMoney(p.pnl_usd, true)}</td></tr>`;
@@ -369,7 +442,7 @@ async function poll() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
     renderPrice(data);
-    for (const mode of ["paper", "oracle_v2", "oracle_v3", "early"]) renderDirectionalPanel(mode, data.bots[mode]);
+    for (const mode of ["paper", "oracle_v2", "oracle_v3", "early", "arb", "copy"]) renderDirectionalPanel(mode, data.bots[mode]);
     dot.className = "dot live";
     text.textContent = "live · " + new Date(data.server_time * 1000).toLocaleTimeString();
   } catch (e) {
@@ -392,7 +465,13 @@ async function pollBotStatus() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
 
-    for (const mode of ["paper", "oracle_v2", "oracle_v3", "early"]) {
+    const wd = data.watchdog;
+    document.getElementById("watchdog-dot").className = "bot-dot" + (wd.running ? " on" : "");
+    document.getElementById("watchdog-start-btn").classList.toggle("disabled", wd.running);
+    document.getElementById("watchdog-stop-btn").classList.toggle("disabled", !wd.running);
+    document.getElementById("watchdog-status-text").textContent = wd.running ? `running (pid ${wd.pid})` : "not running";
+
+    for (const mode of ["paper", "oracle_v2", "oracle_v3", "early", "arb", "copy"]) {
       const status = data[mode];
       document.getElementById(`${mode}-start-btn`).classList.toggle("disabled", status.running);
       document.getElementById(`${mode}-stop-btn`).classList.toggle("disabled", !status.running);
@@ -405,6 +484,32 @@ async function pollBotStatus() {
   } catch (e) {
     // leave last-known status displayed rather than flashing "checking..." on a transient error
   }
+}
+
+async function watchdogAction(action) {
+  setBotMsg("watchdog", action + "…");
+  try {
+    const resp = await fetch("/api/watchdog/" + action, {method: "POST"});
+    const data = await resp.json();
+    setBotMsg("watchdog", resp.ok ? "ok" : (data.error || "HTTP " + resp.status), !resp.ok);
+  } catch (e) {
+    setBotMsg("watchdog", e.message, true);
+  }
+  pollBotStatus();
+}
+
+async function killSwitch() {
+  const val = prompt('Stops the watchdog and ALL bots, and archives their state/trades. Type KILL to confirm:');
+  if (val !== "KILL") return;
+  setBotMsg("watchdog", "killing…");
+  try {
+    const resp = await fetch("/api/killswitch", {method: "POST"});
+    const data = await resp.json();
+    setBotMsg("watchdog", data.ok ? "all stopped and reset" : JSON.stringify(data.bots), !data.ok);
+  } catch (e) {
+    setBotMsg("watchdog", e.message, true);
+  }
+  pollBotStatus();
 }
 
 function paramsFor(mode) {
@@ -420,6 +525,20 @@ function paramsFor(mode) {
       early_max_elapsed: document.getElementById("early-max-elapsed").value,
       max_open_positions: maxOpen === "" ? null : maxOpen,
     };
+  }
+  if (mode === "copy") {
+    const params = {};
+    for (const k of ["follow", "bankroll", "ratio", "max-market-usd", "max-slippage"]) {
+      params[k.replaceAll("-", "_")] = document.getElementById(`copy-${k}`).value;
+    }
+    return params;
+  }
+  if (mode === "arb") {
+    const params = {};
+    for (const k of ["bankroll", "clip-usd", "entry-price", "min-margin", "max-window-usd", "min-seconds-remaining"]) {
+      params[k.replaceAll("-", "_")] = document.getElementById(`arb-${k}`).value;
+    }
+    return params;
   }
   // The three oracle-lag panels accept the same core flags — they're all
   // paper_trader.py, oracle_v2/oracle_v3 the same script with --v2/--v3
@@ -481,7 +600,7 @@ async function stopBot(mode) {
   pollBotStatus();
 }
 
-// -- reset (paper, oracle_v2, oracle_v3, early — see web_dashboard.py docstring) --
+// -- reset (paper, oracle_v2, oracle_v3, early, arb, copy — see web_dashboard.py docstring) --
 
 function showResetConfirm(mode) {
   if (document.getElementById(mode + "-reset-btn").classList.contains("disabled")) return;

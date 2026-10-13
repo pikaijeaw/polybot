@@ -29,3 +29,7 @@ ignore = [
 # gabagool_paper_trader.py does the same for the root-level
 # btc_15m_market_finder.py/gabagool_strategy.py modules it imports.
 "paper_trading/gabagool_paper_trader.py" = ["E402"]
+# pair_cost_paper_trader.py does the same for btc_5m_market_finder.py/gabagool_strategy.py.
+"paper_trading/pair_cost_paper_trader.py" = ["E402"]
+# copy_paper_trader.py does the same for btc_5m_market_finder.py/gabagool_strategy.py.
+"paper_trading/copy_paper_trader.py" = ["E402"]

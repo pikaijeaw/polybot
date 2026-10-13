@@ -12,6 +12,10 @@ Quant-grade performance tracker for PolyBot — three append-only CSV logs.
                      paper_state.json; this is the post-trade blotter).
                      How well do we execute? Where does P&L leak?
 
+    runs.jsonl       One line per process start: timestamp + the exact
+                     command-line settings, so each row above can be tied
+                     to the knobs that produced it.
+
     executions.csv   Every request/response API call, with latency. Not
                      websocket ticks (no per-message request latency to
                      measure there) — connect/reconnect events if anything.
@@ -42,7 +46,9 @@ Run directly for a quick summary report over existing logs:
 
 import argparse
 import csv
+import json
 import statistics
+import sys
 import threading
 import time
 import uuid
@@ -52,6 +58,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+# The one folder every bot logs into, one sub-folder per bot — see log_collector/README.md.
+LOG_ROOT = SCRIPT_DIR / "log_collector"
 DEFAULT_LOG_DIR = SCRIPT_DIR / "perf_logs"
 
 SIGNALS_COLUMNS = [
@@ -123,6 +131,16 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+def append_jsonl(path, record: dict):
+    """Appends one JSON line, stamped with ts/ts_iso — the one writer behind
+    every bot's events.jsonl and runs.jsonl, so they all share those fields."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ts = time.time()
+    with open(path, "a") as f:
+        f.write(json.dumps({"ts": ts, "ts_iso": _iso(ts), **record}) + "\n")
+
+
 @dataclass
 class ExecutionHandle:
     """Mutable holder yielded by time_execution() so the caller can attach
@@ -147,6 +165,9 @@ class PerformanceTracker:
         self._init_file(self.signals_path, SIGNALS_COLUMNS)
         self._init_file(self.trades_path, TRADES_COLUMNS)
         self._init_file(self.executions_path, EXECUTIONS_COLUMNS)
+        # One line per process start: without the settings, nobody can tell
+        # later which knobs produced which rows.
+        append_jsonl(self.log_dir / "runs.jsonl", {"script": Path(sys.argv[0]).name, "argv": sys.argv[1:]})
 
     @staticmethod
     def _init_file(path: Path, columns: list):

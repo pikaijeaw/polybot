@@ -51,7 +51,7 @@ BOTS = {
         "script": PROJECT_ROOT / "paper_trading" / "paper_trader.py",
         "pidfile": PROJECT_ROOT / "paper_trading" / "paper_trader.pid",
         "marker": PROJECT_ROOT / "paper_trading" / "paper_trader.autorestart.json",
-        "log": PROJECT_ROOT / "paper_trading" / "bot.log",
+        "log": PROJECT_ROOT / "log_collector" / "oracle_v1" / "bot.log",
     },
 }
 

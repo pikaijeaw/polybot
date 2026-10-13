@@ -4,8 +4,12 @@ Discover Polymarket's 5-minute BTC Up/Down markets.
 
 These are the recurring "Bitcoin Up or Down - <time range>" markets on the
 "btc-up-or-down-5m" series (slugs look like btc-updown-5m-<epoch>, where
-<epoch> is the unix timestamp of the market's close/resolution time, always
-a multiple of 300). Windows are contiguous and 5-minutes-aligned, so instead
+<epoch> is the unix timestamp of the window's START, always a multiple of
+300 — checked against Gamma on 2026-10-12: eventStartTime == <epoch>,
+endDate == <epoch> + 300. This file used to read it as the close time, which
+made every bot trade the window that had not opened yet. Market.epoch is the
+CLOSE time, slug number + 300, which is what every caller passes on as
+end_epoch). Windows are contiguous and 5-minutes-aligned, so instead
 of asking Gamma to list "recently active" markets, this computes the
 handful of epochs that should exist around the current wall-clock time and
 looks each one up directly by slug.
@@ -64,7 +68,8 @@ class Market:
     epoch: int = field(init=False)
 
     def __post_init__(self):
-        self.epoch = int(SLUG_RE.match(self.slug).group(1))
+        # The slug carries the window's START; .epoch is its CLOSE (see module docstring).
+        self.epoch = int(SLUG_RE.match(self.slug).group(1)) + WINDOW_SECONDS
 
     @property
     def status(self) -> str:
@@ -123,7 +128,7 @@ def fetch_btc_5m_markets(session: requests.Session, lookback: int = 1, lookahead
 
     markets = []
     for epoch in epochs:
-        slug = f"btc-updown-5m-{epoch}"
+        slug = f"btc-updown-5m-{epoch - WINDOW_SECONDS}"
         resp = session.get(f"{GAMMA_API}/markets", params={"slug": slug}, timeout=10)
         resp.raise_for_status()
         data = resp.json()

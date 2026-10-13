@@ -14,6 +14,8 @@ Not affiliated with Polymarket or Binance. Educational/personal-use project. Pap
 2. **`btc_5m_market_finder.py`** locates the live/currently-open Polymarket 5-minute BTC market by computing its slug directly from wall-clock time (`btc-updown-5m-<epoch>`), rather than trusting Gamma's "recently created" ordering — see [Key gotchas](#key-gotchas).
 3. **`oracle_lag_strategy.py`** combines the two: a zero-drift Brownian-motion model estimates P(price closes above the window's anchor) from Binance's live price, sized with quarter-Kelly. Run with `--live` to see real signals printed to the console — **it never places orders itself.**
 4. **`paper_trading/paper_trader.py`** simulates fills for those signals against a virtual bankroll (v1, or `--v2`/`--v3` for the stricter/compounding engines, or `--early` for `early_move_strategy.py`: early entries on a clear move only, fixed stake).
+   - **`paper_trading/pair_cost_paper_trader.py`** is a separate bot, "Arbitrage (Pair Cost)": it buys Up and Down at different moments so their average combined cost (fees included) stays under the $1 a matched pair pays. Fifth panel on the dashboard, or run it directly.
+   - **`paper_trading/copy_paper_trader.py`** paper-copies another Polymarket account's trades (`--follow <username | profile URL | 0x wallet>`), scaled down and filled at live prices. Sixth panel on the dashboard.
 
 ```
 btc_price_feed.py ─┐
@@ -66,31 +68,33 @@ Run all commands from the project root. `nohup setsid` detaches the process so i
 
 **Easiest: run the dashboard in the background, then start bots from its buttons.** Bots started from the dashboard inherit its detached session, so they keep running after the terminal closes too.
 ```bash
-nohup setsid .venv/bin/python -u paper_trading/web_dashboard.py > paper_trading/dashboard.log 2>&1 < /dev/null &
+mkdir -p log_collector
+nohup setsid .venv/bin/python -u paper_trading/web_dashboard.py > log_collector/dashboard.log 2>&1 < /dev/null &
 echo $! > paper_trading/web_dashboard.pid        # the dashboard has no pidfile of its own — save it
 ```
 Then open http://127.0.0.1:5000. The bots keep running if you stop the dashboard; restart it any time.
 
 **Or run a bot directly** (Early-Move shown; these are the same files the dashboard uses, so its panel shows this bot too):
 ```bash
+mkdir -p log_collector/early_move
 nohup setsid .venv/bin/python -u paper_trading/paper_trader.py --early --stake-usd 5 \
-  --state-file paper_trading/paper_state_early.json --trades-log paper_trading/paper_trades_early.jsonl \
+  --state-file paper_trading/paper_state_early.json --trades-log log_collector/early_move/events.jsonl \
   --pid-file paper_trading/paper_trader_early.pid --autorestart-marker paper_trading/paper_trader_early.autorestart.json \
-  --perf-log-dir paper_trading/perf_logs_early \
-  >> paper_trading/bot_early.log 2>&1 < /dev/null &
+  --perf-log-dir log_collector/early_move \
+  >> log_collector/early_move/bot.log 2>&1 < /dev/null &
 ```
-Plain v1 needs none of the file flags: `nohup setsid .venv/bin/python -u paper_trading/paper_trader.py >> paper_trading/bot.log 2>&1 < /dev/null &`
+Plain v1 needs none of the file flags: `mkdir -p log_collector/oracle_v1 && nohup setsid .venv/bin/python -u paper_trading/paper_trader.py >> log_collector/oracle_v1/bot.log 2>&1 < /dev/null &`
 
 **Check / watch / stop:**
 ```bash
 cat paper_trading/paper_trader_early.pid                  # running? (file only exists while it is)
-tail -f paper_trading/bot_early.log                       # live log — Ctrl+C stops watching, not the bot
+tail -f log_collector/early_move/bot.log                    # live log — Ctrl+C stops watching, not the bot
 kill $(cat paper_trading/paper_trader_early.pid)          # graceful stop (the Stop button does the same)
 kill $(cat paper_trading/web_dashboard.pid)               # stop the dashboard
 ```
 Stop by PID as above, not with `pkill -f web_dashboard`: `-f` also matches any shell whose command line contains that text, and can kill your own terminal.
 
-**Logs for analysis** live in `paper_trading/perf_logs_early/` (`signals.csv` = every evaluation, `trades.csv` = every settled trade). The dashboard's Reset moves them to `paper_trading/archive/<bot>-<UTC time>/` and never deletes them.
+**Logs for analysis**: every bot writes into its own sub-folder of `log_collector/` at the project root. [log_collector/README.md](log_collector/README.md) lists the folders and what each file holds. The dashboard's Reset moves a bot's folder to `log_collector/archive/` and never deletes it.
 
 **WSL note:** background processes only live as long as the WSL VM. Closing every WSL terminal lets Windows shut the VM down after a short idle, which kills the bots. Keep at least one WSL window open while the bots run.
 

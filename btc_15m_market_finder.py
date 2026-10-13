@@ -5,7 +5,8 @@ Discover Polymarket's 15-minute BTC Up/Down markets.
 Same series pattern as this project's 5-minute finder (btc_5m_market_finder.py),
 just on a different recurrence: these are the "btc-up-or-down-15m" series,
 slugs look like btc-updown-15m-<epoch> where <epoch> is the unix timestamp of
-the market's close/resolution time, always a multiple of 900. Confirmed live
+the window's START, always a multiple of 900 (Market.epoch is the CLOSE,
+slug number + 900 — see btc_5m_market_finder.py's docstring). Confirmed live
 against Gamma directly (GET /markets?slug=btc-updown-15m-<computed epoch>
 returns a real market with series.slug == "btc-up-or-down-15m") rather than
 assumed from the 5m naming convention.
@@ -64,7 +65,8 @@ class Market:
     epoch: int = field(init=False)
 
     def __post_init__(self):
-        self.epoch = int(SLUG_RE.match(self.slug).group(1))
+        # The slug carries the window's START; .epoch is its CLOSE (see module docstring).
+        self.epoch = int(SLUG_RE.match(self.slug).group(1)) + WINDOW_SECONDS
 
     @property
     def status(self) -> str:
@@ -124,7 +126,7 @@ def fetch_btc_15m_markets(session: requests.Session, lookback: int = 1, lookahea
 
     markets = []
     for epoch in epochs:
-        slug = f"btc-updown-15m-{epoch}"
+        slug = f"btc-updown-15m-{epoch - WINDOW_SECONDS}"
         resp = session.get(f"{GAMMA_API}/markets", params={"slug": slug}, timeout=10)
         resp.raise_for_status()
         data = resp.json()

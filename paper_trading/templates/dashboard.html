@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PolyBot — Oracle-Lag Dashboard</title>
+<title>PolyBot — Paper Trading Dashboard</title>
 <style>
   :root {
     --bg: #0b0e14;
@@ -53,9 +53,6 @@
   .row .label { color: var(--text-dim); }
   .row .value { font-family: var(--mono); }
 
-  .edge-row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding: 5px 9px; border-radius: 6px; background: #171c28; }
-  .edge-row .side { font-weight: 600; font-size: 12.5px; }
-  .edge-row .metrics { font-family: var(--mono); font-size: 12.5px; }
   .pos { color: var(--green); }
   .neg { color: var(--text-dim); }
   .neg.real { color: var(--red); }
@@ -125,7 +122,7 @@
 <body>
 
 <header>
-  <h1>PolyBot — Oracle-Lag Dashboard</h1>
+  <h1>PolyBot — Paper Trading Dashboard</h1>
   <div class="status">
     <span class="dot" id="status-dot"></span>
     <span id="status-text">connecting…</span>
@@ -138,141 +135,16 @@
     <div id="price-content"><div class="empty">Loading…</div></div>
   </div>
   <div class="panel">
-    <h2>Watchdog</h2>
-    <div class="bot-status-line"><span class="bot-dot" id="watchdog-dot"></span><span id="watchdog-status-text">checking…</span></div>
+    <h2>Controls</h2>
     <div class="bot-actions">
-      <button class="btn" id="watchdog-start-btn" onclick="watchdogAction('start')">Start</button>
-      <button class="btn stop" id="watchdog-stop-btn" onclick="watchdogAction('stop')">Stop</button>
       <button class="btn danger" onclick="killSwitch()">KILL SWITCH — stop &amp; reset all</button>
     </div>
-    <div class="bot-msg" id="watchdog-msg"></div>
+    <div class="bot-msg" id="controls-msg"></div>
   </div>
 </div>
 
-<h1 class="section-title">Oracle-Lag v1 / v2 / v3 + Early-Move + Arbitrage + Copy — paper trading</h1>
+<h1 class="section-title">Arbitrage v1 / v2 + Copy — paper trading</h1>
 <div class="strategies-grid">
-
-  <div class="bot-panel paper-panel">
-    <h3>Oracle-Lag v1<span class="sub">5m — Binance/Chainlink lead-lag, quarter-Kelly</span></h3>
-    <div class="bot-status-line"><span class="bot-dot" id="paper-dot"></span><span id="paper-status-text">checking…</span></div>
-    <div id="paper-engine"></div>
-    <div id="paper-stats"></div>
-    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn" href="/api/report.csv?strategy=paper" download>CSV</a></div>
-    <div id="paper-orders"><div class="empty">Loading…</div></div>
-    <div class="bot-fields" style="margin-top:10px;">
-      <label>Bankroll ($)<input type="number" id="paper-bankroll" value="50" step="1"></label>
-      <label>Min edge<input type="number" id="paper-min-edge" value="0.02" step="0.01"></label>
-      <label>Max position %<input type="number" id="paper-max-pos" value="0.05" step="0.01"></label>
-      <label>Kelly multiplier<input type="number" id="paper-kelly" value="0.25" step="0.05"></label>
-      <label>Max open (optional)<input type="number" id="paper-max-open" placeholder="unlimited" step="1"></label>
-    </div>
-    <div class="bot-actions" id="paper-paper-actions">
-      <button class="btn" id="paper-start-btn" onclick="startBot('paper')">Start</button>
-      <button class="btn stop" id="paper-stop-btn" onclick="stopBot('paper')">Stop</button>
-      <button class="btn danger" id="paper-reset-btn" onclick="showResetConfirm('paper')">Reset</button>
-    </div>
-    <div class="confirm-row" id="paper-reset-confirm-row" style="display:none;">
-      <input type="text" id="paper-reset-confirm-input" placeholder="Type RESET to confirm">
-      <button class="btn danger" onclick="confirmReset('paper')">Confirm</button>
-      <button class="btn stop" onclick="cancelResetConfirm('paper')">Cancel</button>
-    </div>
-    <div class="bot-msg" id="paper-msg"></div>
-  </div>
-
-  <div class="bot-panel paperv2-panel">
-    <h3>Oracle-Lag v2<span class="sub">5m — same engine + prob floor, safety-factor, entry window</span></h3>
-    <div class="bot-status-line"><span class="bot-dot" id="oracle_v2-dot"></span><span id="oracle_v2-status-text">checking…</span></div>
-    <div id="oracle_v2-engine"></div>
-    <div id="oracle_v2-stats"></div>
-    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn v2" href="/api/report.csv?strategy=oracle_v2" download>CSV</a></div>
-    <div id="oracle_v2-orders"><div class="empty">Loading…</div></div>
-    <div class="bot-fields" style="margin-top:10px;">
-      <label>Bankroll ($)<input type="number" id="oracle_v2-bankroll" value="50" step="1"></label>
-      <label>Min edge<input type="number" id="oracle_v2-min-edge" value="0.05" step="0.01"></label>
-      <label>Max position %<input type="number" id="oracle_v2-max-pos" value="0.05" step="0.01"></label>
-      <label>Kelly multiplier<input type="number" id="oracle_v2-kelly" value="0.25" step="0.05"></label>
-      <label>Max open (optional)<input type="number" id="oracle_v2-max-open" placeholder="unlimited" step="1"></label>
-      <label>Min prob<input type="number" id="oracle_v2-min-prob" value="0.80" step="0.01"></label>
-      <label>Safety factor<input type="number" id="oracle_v2-safety-factor" value="0.85" step="0.01"></label>
-      <label>Entry window start (s)<input type="number" id="oracle_v2-entry-start" value="240" step="10"></label>
-      <label>Entry window end (s)<input type="number" id="oracle_v2-entry-end" value="10" step="5"></label>
-    </div>
-    <div class="bot-actions" id="oracle_v2-paper-actions">
-      <button class="btn v2" id="oracle_v2-start-btn" onclick="startBot('oracle_v2')">Start</button>
-      <button class="btn stop" id="oracle_v2-stop-btn" onclick="stopBot('oracle_v2')">Stop</button>
-      <button class="btn danger" id="oracle_v2-reset-btn" onclick="showResetConfirm('oracle_v2')">Reset</button>
-    </div>
-    <div class="confirm-row" id="oracle_v2-reset-confirm-row" style="display:none;">
-      <input type="text" id="oracle_v2-reset-confirm-input" placeholder="Type RESET to confirm">
-      <button class="btn danger" onclick="confirmReset('oracle_v2')">Confirm</button>
-      <button class="btn stop" onclick="cancelResetConfirm('oracle_v2')">Cancel</button>
-    </div>
-    <div class="bot-msg" id="oracle_v2-msg"></div>
-  </div>
-
-  <div class="bot-panel paperv3-panel">
-    <h3>Oracle-Lag v3<span class="sub">5m — v2 filters + Kelly sizing that compounds off live equity</span></h3>
-    <div class="bot-status-line"><span class="bot-dot" id="oracle_v3-dot"></span><span id="oracle_v3-status-text">checking…</span></div>
-    <div id="oracle_v3-engine"></div>
-    <div id="oracle_v3-stats"></div>
-    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn v3" href="/api/report.csv?strategy=oracle_v3" download>CSV</a></div>
-    <div id="oracle_v3-orders"><div class="empty">Loading…</div></div>
-    <div class="bot-fields" style="margin-top:10px;">
-      <label>Bankroll ($)<input type="number" id="oracle_v3-bankroll" value="50" step="1"></label>
-      <label>Min edge<input type="number" id="oracle_v3-min-edge" value="0.05" step="0.01"></label>
-      <label>Max position %<input type="number" id="oracle_v3-max-pos" value="0.05" step="0.01"></label>
-      <label>Kelly multiplier<input type="number" id="oracle_v3-kelly" value="0.25" step="0.05"></label>
-      <label>Max open (optional)<input type="number" id="oracle_v3-max-open" placeholder="unlimited" step="1"></label>
-      <label>Min prob<input type="number" id="oracle_v3-min-prob" value="0.80" step="0.01"></label>
-      <label>Safety factor<input type="number" id="oracle_v3-safety-factor" value="0.85" step="0.01"></label>
-      <label>Entry window start (s)<input type="number" id="oracle_v3-entry-start" value="240" step="10"></label>
-      <label>Entry window end (s)<input type="number" id="oracle_v3-entry-end" value="10" step="5"></label>
-    </div>
-    <div class="bot-actions" id="oracle_v3-paper-actions">
-      <button class="btn v3" id="oracle_v3-start-btn" onclick="startBot('oracle_v3')">Start</button>
-      <button class="btn stop" id="oracle_v3-stop-btn" onclick="stopBot('oracle_v3')">Stop</button>
-      <button class="btn danger" id="oracle_v3-reset-btn" onclick="showResetConfirm('oracle_v3')">Reset</button>
-    </div>
-    <div class="confirm-row" id="oracle_v3-reset-confirm-row" style="display:none;">
-      <input type="text" id="oracle_v3-reset-confirm-input" placeholder="Type RESET to confirm">
-      <button class="btn danger" onclick="confirmReset('oracle_v3')">Confirm</button>
-      <button class="btn stop" onclick="cancelResetConfirm('oracle_v3')">Cancel</button>
-    </div>
-    <div class="bot-msg" id="oracle_v3-msg"></div>
-    <div class="dim" style="font-size:10.5px;margin-top:4px;" id="oracle_v3-paper-note">"Bankroll" here only sets the starting/reference value — stakes compound off actual live equity as it grows or shrinks, unlike v1/v2 which size off this number for the whole run.</div>
-  </div>
-
-
-  <div class="bot-panel paperv3-panel">
-    <h3>Early-Move<span class="sub">5m — enters in the first ~90s only on a clear move vs anchor, fixed stake</span></h3>
-    <div class="bot-status-line"><span class="bot-dot" id="early-dot"></span><span id="early-status-text">checking…</span></div>
-    <div id="early-engine"></div>
-    <div id="early-stats"></div>
-    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn v3" href="/api/report.csv?strategy=early" download>CSV</a></div>
-    <div id="early-orders"><div class="empty">Loading…</div></div>
-    <div class="bot-fields" style="margin-top:10px;">
-      <label>Bankroll ($)<input type="number" id="early-bankroll" value="50" step="1"></label>
-      <label>Fixed stake/trade ($)<input type="number" id="early-stake" value="5" step="0.5"></label>
-      <label>Min move (sigmas)<input type="number" id="early-min-z" value="1.5" step="0.1"></label>
-      <label>Max price<input type="number" id="early-max-price" value="0.65" step="0.01"></label>
-      <label>Min edge<input type="number" id="early-min-edge" value="0.03" step="0.01"></label>
-      <label>Max open (optional)<input type="number" id="early-max-open" placeholder="unlimited" step="1"></label>
-      <label>Earliest entry (s after open)<input type="number" id="early-min-elapsed" value="15" step="5"></label>
-      <label>Latest entry (s after open)<input type="number" id="early-max-elapsed" value="90" step="5"></label>
-    </div>
-    <div class="bot-actions">
-      <button class="btn v3" id="early-start-btn" onclick="startBot('early')">Start</button>
-      <button class="btn stop" id="early-stop-btn" onclick="stopBot('early')">Stop</button>
-      <button class="btn danger" id="early-reset-btn" onclick="showResetConfirm('early')">Reset</button>
-    </div>
-    <div class="confirm-row" id="early-reset-confirm-row" style="display:none;">
-      <input type="text" id="early-reset-confirm-input" placeholder="Type RESET to confirm">
-      <button class="btn danger" onclick="confirmReset('early')">Confirm</button>
-      <button class="btn stop" onclick="cancelResetConfirm('early')">Cancel</button>
-    </div>
-    <div class="bot-msg" id="early-msg"></div>
-    <div class="dim" style="font-size:10.5px;margin-top:4px;">Stake never scales with bankroll. Skips any window with no clear early move, or when the bot started mid-window.</div>
-  </div>
 
   <div class="bot-panel paper-panel">
     <h3>Arbitrage (Pair Cost)<span class="sub">5m — legs into Up and Down separately so avg Up + avg Down (fees incl.) stays under $1</span></h3>
@@ -283,11 +155,12 @@
     <div id="arb-orders"><div class="empty">Loading…</div></div>
     <div class="bot-fields" style="margin-top:10px;">
       <label>Bankroll ($)<input type="number" id="arb-bankroll" value="50" step="1"></label>
-      <label>Clip per leg ($)<input type="number" id="arb-clip-usd" value="5" step="0.5"></label>
+      <label>Budget per pair ($)<input type="number" id="arb-clip-usd" value="10" step="1"></label>
       <label>Open leg at ask ≤<input type="number" id="arb-entry-price" value="0.45" step="0.01"></label>
       <label>Min margin under $1<input type="number" id="arb-min-margin" value="0.01" step="0.005"></label>
       <label>Max per window ($)<input type="number" id="arb-max-window-usd" value="20" step="1"></label>
       <label>No new leg in last (s)<input type="number" id="arb-min-seconds-remaining" value="60" step="5"></label>
+      <label>Order delay (ms)<input type="number" id="arb-latency-ms" value="250" step="50"></label>
     </div>
     <div class="bot-actions">
       <button class="btn" id="arb-start-btn" onclick="startBot('arb')">Start</button>
@@ -300,7 +173,38 @@
       <button class="btn stop" onclick="cancelResetConfirm('arb')">Cancel</button>
     </div>
     <div class="bot-msg" id="arb-msg"></div>
-    <div class="dim" style="font-size:10.5px;margin-top:4px;">Side shows shares held (U/D); Entry is the pair cost once both legs exist. A leg that never gets hedged settles as a plain directional bet — at most one clip is unhedged at a time. Settles on Polymarket's own resolution, ~6-10 min after close.</div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;">Side shows shares held (U/D); Entry is the pair cost once both legs exist. A leg that never gets hedged settles as a plain directional bet — at most one leg is unhedged at a time. Budget per pair covers both legs: $10 buys 10 shares of the first side. Orders fill like real ones: after the order delay, against the live book, only at or under the price seen, minimum 5 shares. Settles on Polymarket's own resolution, ~6-10 min after close.</div>
+  </div>
+
+  <div class="bot-panel paper-panel">
+    <h3>Arbitrage (Pair Cost) v2<span class="sub">5m — buys both sides at once when the pair costs under $1 after fees (risk-free); otherwise legs in like v1</span></h3>
+    <div class="bot-status-line"><span class="bot-dot" id="arb2-dot"></span><span id="arb2-status-text">checking…</span></div>
+    <div id="arb2-engine"></div>
+    <div id="arb2-stats"></div>
+    <div class="panel-header"><span class="dim" style="font-size:10.5px;">Orders</span><a class="btn" href="/api/report.csv?strategy=arb2" download>CSV</a></div>
+    <div id="arb2-orders"><div class="empty">Loading…</div></div>
+    <div class="bot-fields" style="margin-top:10px;">
+      <label>Bankroll ($)<input type="number" id="arb2-bankroll" value="50" step="1"></label>
+      <label>Budget per pair ($)<input type="number" id="arb2-clip-usd" value="10" step="1"></label>
+      <label>Open leg at ask ≤<input type="number" id="arb2-entry-price" value="0.45" step="0.01"></label>
+      <label>Min margin under $1<input type="number" id="arb2-min-margin" value="0.01" step="0.005"></label>
+      <label>Max per window ($)<input type="number" id="arb2-max-window-usd" value="20" step="1"></label>
+      <label>No new leg in last (s)<input type="number" id="arb2-min-seconds-remaining" value="60" step="5"></label>
+      <label>Order delay (ms)<input type="number" id="arb2-latency-ms" value="250" step="50"></label>
+      <label>Risk-free pairs only<input type="checkbox" id="arb2-pair-only"></label>
+    </div>
+    <div class="bot-actions">
+      <button class="btn" id="arb2-start-btn" onclick="startBot('arb2')">Start</button>
+      <button class="btn stop" id="arb2-stop-btn" onclick="stopBot('arb2')">Stop</button>
+      <button class="btn danger" id="arb2-reset-btn" onclick="showResetConfirm('arb2')">Reset</button>
+    </div>
+    <div class="confirm-row" id="arb2-reset-confirm-row" style="display:none;">
+      <input type="text" id="arb2-reset-confirm-input" placeholder="Type RESET to confirm">
+      <button class="btn danger" onclick="confirmReset('arb2')">Confirm</button>
+      <button class="btn stop" onclick="cancelResetConfirm('arb2')">Cancel</button>
+    </div>
+    <div class="bot-msg" id="arb2-msg"></div>
+    <div class="dim" style="font-size:10.5px;margin-top:4px;">A risk-free pair needs Up + Down asks to be under $1 after fees — rare. "Risk-free pairs only" turns off v1-style legging, so the bot may sit idle for long stretches. If one leg of a pair misses, the leftover is an ordinary unhedged leg and the hedge rule closes it later.</div>
   </div>
 
   <div class="bot-panel paperv2-panel">
@@ -337,6 +241,7 @@
 
 <script>
 const REFRESH_MS = 1500;
+const BOTS = ["arb", "arb2", "copy"];
 
 function fmtMoney(x, signed) {
   if (x === null || x === undefined) return "-";
@@ -369,9 +274,9 @@ function renderPrice(data) {
   document.getElementById("price-content").innerHTML = html;
 }
 
-// -- Oracle-lag v1/v2/v3 paper mode (identical state shape — see CLAUDE.md) --
+// -- bot panels: every bot writes the same state shape (see web_dashboard.py) --
 
-function renderDirectionalPanel(mode, state) {
+function renderPanel(mode, state) {
   const engineEl = document.getElementById(`${mode}-engine`);
   const statsEl = document.getElementById(`${mode}-stats`);
   const ordersEl = document.getElementById(`${mode}-orders`);
@@ -386,20 +291,8 @@ function renderDirectionalPanel(mode, state) {
   const engine = state.engine;
   let eHtml = "";
   if (engine) {
-    const approx = engine.anchor_is_approximate ? "~" : "";
     if (engine.market_slug) eHtml += `<div class="row"><span class="label">Window</span><span class="value">${esc(engine.market_slug)}</span></div>`;
-    if (engine.rows) {
-      // Bots with no anchor/edge model (arb, copy) send ready-made [label, value] rows instead.
-      for (const [label, value] of engine.rows) eHtml += `<div class="row"><span class="label">${esc(label)}</span><span class="value">${esc(value)}</span></div>`;
-    } else {
-      eHtml += `<div class="row"><span class="label">Anchor / closes in</span><span class="value">${approx}${fmtNum(engine.anchor_price)} · ${fmtNum(engine.seconds_remaining, 0)}s</span></div>`;
-    }
-    if (engine.up_edge !== null && engine.up_edge !== undefined) {
-      const upCls = engine.up_edge > 0 ? "pos" : "neg";
-      const downCls = (engine.down_edge || 0) > 0 ? "pos" : "neg";
-      eHtml += `<div class="edge-row"><span class="side">Up</span><span class="metrics ${upCls}">ask ${fmtNum(engine.up_ask, 3)} · edge ${fmtPct(engine.up_edge)}</span></div>`;
-      eHtml += `<div class="edge-row"><span class="side">Down</span><span class="metrics ${downCls}">ask ${fmtNum(engine.down_ask, 3)} · edge ${fmtPct(engine.down_edge)}</span></div>`;
-    }
+    for (const [label, value] of engine.rows || []) eHtml += `<div class="row"><span class="label">${esc(label)}</span><span class="value">${esc(value)}</span></div>`;
   }
   engineEl.innerHTML = eHtml;
 
@@ -442,7 +335,7 @@ async function poll() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
     renderPrice(data);
-    for (const mode of ["paper", "oracle_v2", "oracle_v3", "early", "arb", "copy"]) renderDirectionalPanel(mode, data.bots[mode]);
+    for (const mode of BOTS) renderPanel(mode, data.bots[mode]);
     dot.className = "dot live";
     text.textContent = "live · " + new Date(data.server_time * 1000).toLocaleTimeString();
   } catch (e) {
@@ -465,13 +358,7 @@ async function pollBotStatus() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
 
-    const wd = data.watchdog;
-    document.getElementById("watchdog-dot").className = "bot-dot" + (wd.running ? " on" : "");
-    document.getElementById("watchdog-start-btn").classList.toggle("disabled", wd.running);
-    document.getElementById("watchdog-stop-btn").classList.toggle("disabled", !wd.running);
-    document.getElementById("watchdog-status-text").textContent = wd.running ? `running (pid ${wd.pid})` : "not running";
-
-    for (const mode of ["paper", "oracle_v2", "oracle_v3", "early", "arb", "copy"]) {
+    for (const mode of BOTS) {
       const status = data[mode];
       document.getElementById(`${mode}-start-btn`).classList.toggle("disabled", status.running);
       document.getElementById(`${mode}-stop-btn`).classList.toggle("disabled", !status.running);
@@ -486,46 +373,21 @@ async function pollBotStatus() {
   }
 }
 
-async function watchdogAction(action) {
-  setBotMsg("watchdog", action + "…");
-  try {
-    const resp = await fetch("/api/watchdog/" + action, {method: "POST"});
-    const data = await resp.json();
-    setBotMsg("watchdog", resp.ok ? "ok" : (data.error || "HTTP " + resp.status), !resp.ok);
-  } catch (e) {
-    setBotMsg("watchdog", e.message, true);
-  }
-  pollBotStatus();
-}
-
 async function killSwitch() {
-  const val = prompt('Stops the watchdog and ALL bots, and archives their state/trades. Type KILL to confirm:');
+  const val = prompt('Stops ALL bots and archives their state and logs. Type KILL to confirm:');
   if (val !== "KILL") return;
-  setBotMsg("watchdog", "killing…");
+  setBotMsg("controls", "killing…");
   try {
     const resp = await fetch("/api/killswitch", {method: "POST"});
     const data = await resp.json();
-    setBotMsg("watchdog", data.ok ? "all stopped and reset" : JSON.stringify(data.bots), !data.ok);
+    setBotMsg("controls", data.ok ? "all stopped and reset" : JSON.stringify(data.bots), !data.ok);
   } catch (e) {
-    setBotMsg("watchdog", e.message, true);
+    setBotMsg("controls", e.message, true);
   }
   pollBotStatus();
 }
 
 function paramsFor(mode) {
-  if (mode === "early") {
-    const maxOpen = document.getElementById("early-max-open").value;
-    return {
-      bankroll: document.getElementById("early-bankroll").value,
-      stake_usd: document.getElementById("early-stake").value,
-      min_z: document.getElementById("early-min-z").value,
-      max_price: document.getElementById("early-max-price").value,
-      min_edge: document.getElementById("early-min-edge").value,
-      early_min_elapsed: document.getElementById("early-min-elapsed").value,
-      early_max_elapsed: document.getElementById("early-max-elapsed").value,
-      max_open_positions: maxOpen === "" ? null : maxOpen,
-    };
-  }
   if (mode === "copy") {
     const params = {};
     for (const k of ["follow", "bankroll", "ratio", "max-market-usd", "max-slippage"]) {
@@ -533,31 +395,14 @@ function paramsFor(mode) {
     }
     return params;
   }
-  if (mode === "arb") {
+  if (mode === "arb" || mode === "arb2") {
     const params = {};
-    for (const k of ["bankroll", "clip-usd", "entry-price", "min-margin", "max-window-usd", "min-seconds-remaining"]) {
-      params[k.replaceAll("-", "_")] = document.getElementById(`arb-${k}`).value;
+    for (const k of ["bankroll", "clip-usd", "entry-price", "min-margin", "max-window-usd", "min-seconds-remaining", "latency-ms"]) {
+      params[k.replaceAll("-", "_")] = document.getElementById(`${mode}-${k}`).value;
     }
+    if (mode === "arb2") params.pair_only = document.getElementById("arb2-pair-only").checked;
     return params;
   }
-  // The three oracle-lag panels accept the same core flags — they're all
-  // paper_trader.py, oracle_v2/oracle_v3 the same script with --v2/--v3
-  // (see its argparse).
-  const maxOpen = document.getElementById(`${mode}-max-open`).value;
-  const params = {
-    bankroll: document.getElementById(`${mode}-bankroll`).value,
-    min_edge: document.getElementById(`${mode}-min-edge`).value,
-    max_position_pct: document.getElementById(`${mode}-max-pos`).value,
-    kelly_multiplier: document.getElementById(`${mode}-kelly`).value,
-    max_open_positions: maxOpen === "" ? null : maxOpen,
-  };
-  if (mode === "oracle_v2" || mode === "oracle_v3") {
-    params.min_prob = document.getElementById(`${mode}-min-prob`).value;
-    params.safety_factor = document.getElementById(`${mode}-safety-factor`).value;
-    params.entry_window_start = document.getElementById(`${mode}-entry-start`).value;
-    params.entry_window_end = document.getElementById(`${mode}-entry-end`).value;
-  }
-  return params;
 }
 
 async function startBot(mode) {
@@ -600,7 +445,7 @@ async function stopBot(mode) {
   pollBotStatus();
 }
 
-// -- reset (paper, oracle_v2, oracle_v3, early, arb, copy — see web_dashboard.py docstring) --
+// -- reset (see web_dashboard.py docstring) --
 
 function showResetConfirm(mode) {
   if (document.getElementById(mode + "-reset-btn").classList.contains("disabled")) return;

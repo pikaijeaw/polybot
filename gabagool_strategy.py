@@ -9,10 +9,8 @@ market's two outcomes always sum to exactly $1 at settlement (whichever side
 resolves pays $1/share, the other pays $0), buying an equal number of shares
 of both sides for a combined cost under $1 locks in a deterministic profit —
 outcome-independent, no probability model or Kelly sizing involved. That
-makes this a fundamentally different shape of engine than
-oracle_lag_strategy.py / trend_strategy.py (which forecast a direction); it
-deliberately does not implement their on_price_tick/set_market/compute/evaluate
-interface.
+makes this a fundamentally different shape of engine than one that
+forecasts a direction.
 
 THE $0.975 THRESHOLD FROM THE REFERENCE REPO IS NOT USED HERE — it ignores
 fees, and fees are not a footnote for an arbitrage strategy, they're the

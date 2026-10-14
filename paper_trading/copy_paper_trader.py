@@ -36,8 +36,8 @@ Logs go to log_collector/copy_trading/ in the same files as every other bot (see
 log_collector/README.md). events.jsonl has one BUY/SELL/SKIP line per copy decision, with
 lag_s and our price vs the leader's.
 
-State file is written in paper_trader.py's shape so web_dashboard.py's shared
-panel/CSV/reset code works on it.
+State file uses the shape web_dashboard.py's shared panel/CSV/reset code
+reads, the same as pair_cost_paper_trader.py.
 
 Usage (run from anywhere — paths resolve relative to this script):
     python paper_trading/copy_paper_trader.py --selftest
@@ -296,15 +296,9 @@ class CopyPaperTrader:
             self.tracker.log_trade(
                 market_slug=pos["market_slug"],
                 side=pos["side"],
-                signal_ts=pos["opened_at"],
-                signal_probability="",
-                signal_edge="",
-                kelly_fraction="",
-                requested_price=closed["entry_price"],
-                filled_price=closed["entry_price"],
+                entry_price=closed["entry_price"],
                 stake_usd=pos["cost"],
                 shares=pos["bought"],
-                bankroll_before="",
                 bankroll_after=self.cash,
                 entry_ts=pos["opened_at"],
                 resolve_ts=closed["settled_at"],
@@ -428,7 +422,9 @@ def main():
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_PATH))
     parser.add_argument("--trades-log", default=str(DEFAULT_TRADES_LOG_PATH))
-    parser.add_argument("--perf-log-dir", default=str(DEFAULT_LOG_DIR), help="signals/trades/executions CSVs")
+    parser.add_argument(
+        "--perf-log-dir", default=str(DEFAULT_LOG_DIR), help="Folder for signals.csv/trades.csv/runs.jsonl"
+    )
     parser.add_argument("--pid-file", default=str(DEFAULT_PID_PATH))
     args = parser.parse_args()
 

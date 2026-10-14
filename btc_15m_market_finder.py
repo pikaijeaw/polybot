@@ -12,8 +12,7 @@ returns a real market with series.slug == "btc-up-or-down-15m") rather than
 assumed from the 5m naming convention.
 
 This is a deliberately separate file rather than a parameterized version of
-btc_5m_market_finder.py, same reasoning as trend_strategy.py living alongside
-oracle_lag_strategy.py rather than as a flag on it. It does, though, reuse
+btc_5m_market_finder.py, so each series stays simple to read. It does, though, reuse
 resolve_market_outcome() and fetch_order_book() from btc_5m_market_finder.py
 by import rather than copy-pasting: both are already generic over
 `slug`/`token_id`, and this repo's convention (see CLAUDE.md) is that

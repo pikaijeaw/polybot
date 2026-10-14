@@ -5,7 +5,7 @@ description: Use when adding a new Python script to this Polymarket trading bot 
 
 # Adding a new script to PolyBot
 
-Before writing, check whether an existing script already does most of what's needed (`oracle_lag_strategy.py` for signals, `paper_trading/paper_trader.py` for simulated fills, `notify.py` for Telegram) — extend rather than duplicate where it fits.
+Before writing, check whether an existing script already does most of what's needed (`paper_trading/pair_cost_paper_trader.py` or `copy_paper_trader.py` for a paper bot's loop, state file and logging, `btc_5m_market_finder.py` for markets, books and settlement, `notify.py` for Telegram) — extend rather than duplicate where it fits.
 
 ## 1. Paper only
 
@@ -23,7 +23,7 @@ Real environment variables must still take precedence — `load_dotenv()`'s defa
 
 ## 3. If the script lives in a subdirectory (like `paper_trading/`)
 
-Root-level modules (`btc_price_feed.py`, `oracle_lag_strategy.py`, etc.) aren't importable by default from a subdirectory. Insert the project root onto `sys.path` before importing them — copy the pattern from `paper_trading/paper_trader.py`:
+Root-level modules (`btc_5m_market_finder.py`, `performance_tracker.py`, etc.) aren't importable by default from a subdirectory. Insert the project root onto `sys.path` before importing them — copy the pattern from `paper_trading/pair_cost_paper_trader.py`:
 ```python
 import sys
 from pathlib import Path
@@ -32,7 +32,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SCRIPT_DIR))  # for importing siblings in the same subdirectory
 
-import oracle_lag_strategy as strategy  # etc.
+import btc_5m_market_finder as finder  # etc.
 ```
 
 ## 4. Verifying it works
@@ -40,7 +40,7 @@ import oracle_lag_strategy as strategy  # etc.
 There's no unit test suite in this repo — new scripts are verified by actually running them against the real APIs (Binance, Polymarket Gamma/CLOB), not mocks:
 
 - Run it live against the real public endpoints and inspect the output.
-- Clean up any state files your test run created (e.g. `paper_trading/paper_state.json`) before finishing, unless the user is actively using them.
+- Clean up any state files your test run created (e.g. `paper_trading/pair_cost_state.json`) before finishing, unless the user is actively using them.
 
 ## 5. New dependencies
 

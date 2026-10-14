@@ -2,19 +2,12 @@
 """
 Paper trading loop for gabagool_strategy.py's GabagoolEngine — a YES/NO
 order-book arbitrage strategy on Polymarket's BTC 15-minute Up/Down markets.
-Lives alongside paper_trader.py (this directory) so both are managed by the
-same web_dashboard.py control plane, but shares none of its logic or state:
-own state file (gabagool_state.json), own trades log (gabagool_trades.jsonl),
+Own state file (gabagool_state.json), own trades log (gabagool_trades.jsonl),
 own pidfile, own market finder (../btc_15m_market_finder.py, 15-minute
-windows, not the 5-minute series paper_trader.py/trend_paper_trader.py
-trade). See gabagool_strategy.py's module docstring for why this needed its
-own engine rather than reusing oracle_lag_strategy.OracleLagEngine's
-interface (the way trend_paper_trader.py does): arbitrage has no probability
-model, no direction, no Kelly sizing, and no Binance price feed dependency
-at all — it only ever looks at Polymarket's own order books. Consequently
-this script does not reuse PaperTrader from paper_trader.py either — it has
-its own bespoke GabagoolPaperTrader below, with a genuinely different
-position/settlement shape (deterministic profit, not outcome-dependent).
+windows). Arbitrage has no probability model, no direction, no Kelly sizing,
+and no Binance price feed dependency at all — it only ever looks at
+Polymarket's own order books, and its profit is deterministic rather than
+outcome-dependent.
 
 PAPER TRADING ONLY. There is no --live flag and no order-signing path here
 by design (see gabagool_strategy.py's "Leg risk" note) — real execution of a
@@ -49,9 +42,7 @@ positions live in gabagool_state.json's open_positions instead) — same
 "blotter, not a lifecycle log" convention as the rest of this repo (see
 ../CLAUDE.md's Key Gotchas).
 
-Monitor and control it via web_dashboard.py (this directory), which starts
-it as a subprocess and reads gabagool_state.json/gabagool_trades.jsonl from
-disk the same way it already does for paper_trader.py.
+It is not on web_dashboard.py; run it directly and read gabagool_state.json.
 
 Usage (run from anywhere — paths resolve relative to this script):
     python paper_trading/gabagool_paper_trader.py

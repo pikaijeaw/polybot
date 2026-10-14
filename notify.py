@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Telegram notifications — the one place every bot/watchdog sends alerts
+"""Telegram notifications — the one place every bot sends alerts
 and hourly summaries through."""
 
 import os

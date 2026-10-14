@@ -18,18 +18,14 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-# paper_trader.py deliberately inserts the project root onto sys.path before
-# importing root-level sibling modules — see its top-of-file comment.
-"paper_trading/paper_trader.py" = ["E402"]
-# web_dashboard.py does the same for its sibling dashboard.py import.
+# Scripts in paper_trading/ insert the project root onto sys.path before
+# importing root-level sibling modules — see their top-of-file comments.
 "paper_trading/web_dashboard.py" = ["E402"]
-# trend_paper_trader.py does the same for paper_trading/paper_trader.py and
-# the root-level modules it reuses.
-"experiments/trend_paper_trader.py" = ["E402"]
-# gabagool_paper_trader.py does the same for the root-level
+# gabagool_paper_trader.py: the root-level
 # btc_15m_market_finder.py/gabagool_strategy.py modules it imports.
 "paper_trading/gabagool_paper_trader.py" = ["E402"]
 # pair_cost_paper_trader.py does the same for btc_5m_market_finder.py/gabagool_strategy.py.
 "paper_trading/pair_cost_paper_trader.py" = ["E402"]
 # copy_paper_trader.py does the same for btc_5m_market_finder.py/gabagool_strategy.py.
 "paper_trading/copy_paper_trader.py" = ["E402"]
+"paper_trading/pair_cost_v2_paper_trader.py" = ["E402"]

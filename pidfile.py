@@ -2,7 +2,7 @@
 """
 Tiny PID-file helper for single-instance process protection.
 
-paper_trader.py claims a pidfile on startup and clean
+Each bot claims a pidfile on startup and cleans
 it up on normal exit. That lets web_dashboard.py answer "is this bot already
 running?" by checking whether the PID inside is still alive, without ever
 holding a live subprocess handle itself — a handle breaks the moment the
@@ -31,8 +31,8 @@ def pid_is_alive(pid: int) -> bool:
     # waiting on its parent to reap it) passes that check too, even though
     # it's already dead in every sense callers here care about. A bot killed
     # with SIGKILL (or crashed) while its parent hasn't reaped it yet would
-    # otherwise be misreported as "running" by web_dashboard.py and, worse,
-    # never get restarted by watchdog.py. /proc is Linux-only; anywhere else
+    # otherwise be misreported as "running" by web_dashboard.py. /proc is
+    # Linux-only; anywhere else
     # this silently falls back to the os.kill-only result above.
     try:
         with open(f"/proc/{pid}/stat") as f:
@@ -78,7 +78,7 @@ def claim_or_exit(path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Autorestart marker — lets watchdog.py tell "crashed" apart from "the user
+# Autorestart marker — lets a supervisor process tell "crashed" apart from "the user
 # meant to stop this"
 # ---------------------------------------------------------------------------
 #
@@ -86,9 +86,10 @@ def claim_or_exit(path: Path) -> None:
 # ONLY on its graceful, signal-triggered shutdown path (SIGINT/SIGTERM ->
 # asyncio.CancelledError) — never from a generic atexit/finally handler,
 # because those also run after an uncaught exception, which would erase the
-# very evidence watchdog.py needs to see. So: marker present + pidfile dead
+# very evidence a supervisor needs to see. So: marker present + pidfile dead
 # = crashed, restart it. Marker absent = someone deliberately stopped it,
-# leave it down.
+# leave it down. Nothing in this repo reads the marker at the moment;
+# gabagool_paper_trader.py still writes it.
 
 
 def write_autorestart_marker(path: Path, argv: list) -> None:

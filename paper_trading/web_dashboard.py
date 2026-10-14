@@ -1,80 +1,50 @@
 #!/usr/bin/env python3
 """
-Web dashboard for the oracle-lag scalper's paper bots — v1, v2, and v3 —
-plus a live BTC price up top. A separate process from any of the bots it manages by
+Web dashboard for the paper bots — Arbitrage (Pair Cost) and Copy Trading —
+plus a live BTC price up top. A separate process from the bots it manages, by
 design.
 
-Reads each bot's own state file/trades log from disk; never imports or talks
-to a bot process directly. That's deliberate isolation: restart this
-dashboard as often as you like — to change ports, pull in a template edit,
-whatever — without ever interrupting a running bot, and vice versa. If this
-process crashes or hangs, the bots keep trading uninterrupted.
+Reads each bot's own state file/trades log from disk; never talks to a bot
+process directly. That's deliberate isolation: restart this dashboard as often
+as you like without interrupting a running bot, and vice versa. If this
+process crashes or hangs, the bots keep trading.
 
-Mostly read-only: never signs anything or places orders, and only reads
-state/trades files and polls public price data, same as dashboard.py
-(the terminal version, used for its price-watching logic) —
-with one deliberate exception, /api/<strategy>/reset (see below), which
-archives that bot's own state and starts it fresh.
-
-Note: this dashboard used to also carry Gabagool (arbitrage) and
-Trend-Confirm (EMA/Supertrend) panels. Both were removed — UI only:
-gabagool_strategy.py, gabagool_paper_trader.py, trend_strategy.py, and
-experiments/trend_paper_trader.py are all untouched and remain fully
-runnable standalone; see their own module docstrings.
+Mostly read-only: never signs anything or places orders. The exceptions are
+the bot controls below and /api/<strategy>/reset.
 
 Usage:
     python paper_trading/web_dashboard.py
     python paper_trading/web_dashboard.py --port 8080
-    python paper_trading/web_dashboard.py --state-file /path/to/paper_state.json --trades-log /path/to/paper_trades.jsonl
     python paper_trading/web_dashboard.py --host 0.0.0.0   # expose beyond localhost — only on a trusted network
 
 Then open http://127.0.0.1:5000 in a browser. Polls this app's own
 /api/data endpoint roughly every 1.5s via plain JS fetch() — no websockets.
 
-Bot control plane: this process also owns start/stop/status for
-paper_trader.py (v1/v2/v3 — see /api/bot/*), spawning each as its own
-subprocess and tracking liveness via a pidfile (pidfile.py) rather than an
-in-memory handle — that way a dashboard restart can still see whether a bot
-is running instead of losing track of it or spawning a duplicate.
+Bot control plane: this process owns start/stop/status for each bot
+(/api/bot/*), spawning it as its own subprocess and tracking liveness via a
+pidfile (pidfile.py) rather than an in-memory handle — that way a dashboard
+restart can still see whether a bot is running instead of losing track of it
+or spawning a duplicate.
 
-"paper" (oracle-lag v1, 5m), "oracle_v2" (oracle-lag v2 — same engine,
-three additional entry filters, see oracle_lag_strategy.py), and
-"oracle_v3" (oracle-lag v3 — v2's filters plus Kelly sizing that compounds
-off live equity instead of a fixed bankroll, see oracle_lag_strategy.py)
-are three independent paper strategies, all always-visible, all
-independently start/stop-able, and all rendered in parallel on one page —
-not a toggle between them. All three run the exact same script
-(paper_trader.py, --v2 / --v3 for the latter two) against the exact same
-live market, which is the point: start them side by side to compare v1 vs
-v2 vs v3 in real time — see _oracle_v2_args/_oracle_v3_args, which have to
-explicitly override every one of paper_trader.py's
---state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir so
-"oracle_v2"/"oracle_v3" don't silently share "paper"'s files (that script's
-own defaults for all five are identical regardless of --v2/--v3).
-/api/data returns all three paper states in one payload under "bots" (see
-PAPER_STRATEGIES, _state_paths_for) rather than taking a selector;
-/api/report.csv and the reset endpoints still take a per-strategy target
-since a CSV export or a destructive reset is inherently a "pick one" action.
-
-"early" is the same script again with --early (early_move_strategy.py:
-early entries on a clear move only, fixed stake) — see _early_args.
-
-"arb" is a different script, pair_cost_paper_trader.py ("Arbitrage (Pair
-Cost)": legs into Up and Down separately so their average combined cost
-stays under $1). It writes its state in paper_trader.py's shape, so it
-shares the panel/CSV/reset code — see _arb_args.
-
-"copy" is copy_paper_trader.py: mirrors one Polymarket account's trades
-(any market) into a paper bankroll. Same state shape again — see _copy_args.
+"arb" is pair_cost_paper_trader.py ("Arbitrage (Pair Cost)": legs into Up and
+Down separately so their average combined cost stays under $1) — see
+_arb_args. "arb2" is pair_cost_v2_paper_trader.py: the same bot, but it buys
+a risk-free pair (both sides at once, under $1 after fees) whenever the book
+offers one — see _arb2_args. "copy" is copy_paper_trader.py: mirrors one Polymarket account's
+trades (any market) into a paper bankroll — see _copy_args. Both write the
+same state shape, so they share the panel/CSV/reset code. /api/data returns
+every bot's state in one payload under "bots".
 
 Every bot logs into its own folder, log_collector/<folder>/ at the project
-root (bot.log, events.jsonl, runs.jsonl, signals/trades/executions.csv) — see
+root (bot.log, events.jsonl, runs.jsonl, signals.csv, trades.csv) — see
 LOGS_DIR/LOG_FOLDERS and log_collector/README.md.
 
 /api/<strategy>/reset (POST) moves that bot's state file and its whole
-log folder into log_collector/archive/<folder>_<UTC date>_<time>/ —
-never deletes them, so a reset run is still there to analyse. Each refuses (409) while its own bot is running, same reason two instances
-of either bot aren't allowed to share one state file (see pidfile.py).
+log folder into log_collector/archive/<folder>_<UTC date>_<time>/ — never
+deletes them, so a reset run is still there to analyse. Refuses (409) while
+that bot is running.
+
+/api/killswitch (POST) stops every bot and then resets each one.
 """
 
 import argparse
@@ -89,6 +59,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import requests
 from flask import Flask, Response, jsonify, render_template, request
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -96,98 +67,68 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 import copy_paper_trader as copy_bot
-import dashboard as dash  # reuse LivePrice / load_paper_state — no duplicated logic
 import pair_cost_paper_trader as pair_cost
+import pair_cost_v2_paper_trader as pair_cost_v2
 
-import early_move_strategy
-import oracle_lag_strategy
 import pidfile
 
 app = Flask(__name__, root_path=str(SCRIPT_DIR))
 
-live_price = dash.LivePrice()
-state_path = dash.DEFAULT_STATE_PATH
+
+class LivePrice:
+    """Polls Binance's REST last-price endpoint at most every 2 seconds."""
+
+    def __init__(self, symbol: str = "BTCUSDT"):
+        self.symbol = symbol
+        self.price: float | None = None
+        self.error: str | None = None
+        self._next_poll = 0.0
+
+    def maybe_refresh(self):
+        if time.time() < self._next_poll:
+            return
+        try:
+            resp = requests.get(
+                "https://api.binance.com/api/v3/ticker/price", params={"symbol": self.symbol}, timeout=5
+            )
+            resp.raise_for_status()
+            self.price = float(resp.json()["price"])
+            self.error = None
+        except Exception as e:
+            self.error = str(e)
+        self._next_poll = time.time() + 2.0
+
+
+def _load_state(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+live_price = LivePrice()
 # Every bot's logs live in log_collector/<folder>/ at the project root (bot.log,
 # events.jsonl, runs.jsonl, the tracker CSVs) — see log_collector/README.md.
 # Folder names are spelled out so the folder can be read without knowing the mode keys.
 LOGS_DIR = PROJECT_ROOT / "log_collector"
-LOG_FOLDERS = {
-    "paper": "oracle_v1",
-    "oracle_v2": "oracle_v2",
-    "oracle_v3": "oracle_v3",
-    "early": "early_move",
-    "arb": "arbitrage_pair_cost",
-    "copy": "copy_trading",
-}
-trades_log_path = LOGS_DIR / "oracle_v1" / "events.jsonl"
+LOG_FOLDERS = {"arb": "arbitrage_pair_cost", "arb2": "arbitrage_pair_cost_v2", "copy": "copy_trading"}
 
 # -- bot process control -----------------------------------------------------
 
-# "oracle_v2"/"oracle_v3" run paper_trader.py itself (same script as
-# "paper") with --v2/--v3 — but paper_trader.py's own
-# --state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir
-# defaults are IDENTICAL regardless of which version flag is passed (those
-# flags only swap the strategy engine). Left alone, a dashboard-spawned
-# "oracle_v2"/"oracle_v3" process would silently share "paper"'s state
-# file, trades log, perf-log CSVs, and even its pidfile (refusing to start
-# at all while "paper" is running). Every one of these must be passed
-# explicitly in _oracle_v2_args/_oracle_v3_args to actually get the
-# isolation the panels are supposed to have — see api_bot_start.
-ORACLE_V2_STATE_PATH = SCRIPT_DIR / "paper_state_v2.json"
-ORACLE_V2_TRADES_LOG_PATH = LOGS_DIR / "oracle_v2" / "events.jsonl"
-ORACLE_V2_PID_PATH = SCRIPT_DIR / "paper_trader_v2.pid"
-ORACLE_V2_AUTORESTART_MARKER = SCRIPT_DIR / "paper_trader_v2.autorestart.json"
-ORACLE_V2_PERF_LOG_DIR = LOGS_DIR / "oracle_v2"
-
-ORACLE_V3_STATE_PATH = SCRIPT_DIR / "paper_state_v3.json"
-ORACLE_V3_TRADES_LOG_PATH = LOGS_DIR / "oracle_v3" / "events.jsonl"
-ORACLE_V3_PID_PATH = SCRIPT_DIR / "paper_trader_v3.pid"
-ORACLE_V3_AUTORESTART_MARKER = SCRIPT_DIR / "paper_trader_v3.autorestart.json"
-ORACLE_V3_PERF_LOG_DIR = LOGS_DIR / "oracle_v3"
-
-EARLY_STATE_PATH = SCRIPT_DIR / "paper_state_early.json"
-EARLY_TRADES_LOG_PATH = LOGS_DIR / "early_move" / "events.jsonl"
-EARLY_PID_PATH = SCRIPT_DIR / "paper_trader_early.pid"
-EARLY_AUTORESTART_MARKER = SCRIPT_DIR / "paper_trader_early.autorestart.json"
-EARLY_PERF_LOG_DIR = LOGS_DIR / "early_move"
-
+# Each bot is its own script with its own unique state/pid/log defaults, so no
+# path overrides are needed when spawning it.
 BOT_SCRIPTS = {
-    "paper": {
-        "script": SCRIPT_DIR / "paper_trader.py",
-        "pidfile": SCRIPT_DIR / "paper_trader.pid",
-        "log": LOGS_DIR / "oracle_v1" / "bot.log",
-    },
-    "oracle_v2": {
-        # Same script as "paper" — paper_trader.py's --v2 flag swaps in
-        # oracle_lag_strategy.OracleLagEngineV2 (see _oracle_v2_args).
-        # Distinct pidfile/state/trades/log so it can run alongside "paper"
-        # without either corrupting the other's history — that's the whole
-        # point, comparing v1 and v2 live against the same market.
-        "script": SCRIPT_DIR / "paper_trader.py",
-        "pidfile": ORACLE_V2_PID_PATH,
-        "log": LOGS_DIR / "oracle_v2" / "bot.log",
-    },
-    "oracle_v3": {
-        # Same script again — paper_trader.py's --v3 flag swaps in
-        # oracle_lag_strategy.OracleLagEngineV3 (see _oracle_v3_args).
-        # Distinct pidfile/state/trades/log, same reasoning as "oracle_v2".
-        "script": SCRIPT_DIR / "paper_trader.py",
-        "pidfile": ORACLE_V3_PID_PATH,
-        "log": LOGS_DIR / "oracle_v3" / "bot.log",
-    },
-    "early": {
-        # Same script again — paper_trader.py's --early flag swaps in
-        # early_move_strategy.EarlyMoveEngine (see _early_args).
-        "script": SCRIPT_DIR / "paper_trader.py",
-        "pidfile": EARLY_PID_PATH,
-        "log": LOGS_DIR / "early_move" / "bot.log",
-    },
     "arb": {
         # A different script with its own unique file defaults, so no
         # path overrides are needed (see _arb_args).
         "script": SCRIPT_DIR / "pair_cost_paper_trader.py",
         "pidfile": pair_cost.DEFAULT_PID_PATH,
         "log": LOGS_DIR / "arbitrage_pair_cost" / "bot.log",
+    },
+    "arb2": {
+        "script": SCRIPT_DIR / "pair_cost_v2_paper_trader.py",
+        "pidfile": pair_cost_v2.DEFAULT_PID_PATH,
+        "log": LOGS_DIR / "arbitrage_pair_cost_v2" / "bot.log",
     },
     "copy": {
         "script": SCRIPT_DIR / "copy_paper_trader.py",
@@ -197,27 +138,12 @@ BOT_SCRIPTS = {
 }
 bot_processes: dict = {}  # mode -> subprocess.Popen, only for processes THIS dashboard instance spawned
 
-# "paper", "oracle_v2", and "oracle_v3" are three independent strategies,
-# each always visible and independently start/stop-able (see
-# templates/dashboard.html). This maps which (state_file, trades_log) pair
-# backs each one; "paper"'s pair is mutable (set from
-# --state-file/--trades-log in main()), the other two are fixed to their
-# own scripts' defaults since there's no CLI flag for either here.
-PAPER_STRATEGIES = ("paper", "oracle_v2", "oracle_v3", "early", "arb", "copy")
+PAPER_STRATEGIES = tuple(BOT_SCRIPTS)
 
 
 def _state_paths_for(strategy: str) -> tuple:
-    if strategy == "oracle_v2":
-        return ORACLE_V2_STATE_PATH, ORACLE_V2_TRADES_LOG_PATH
-    if strategy == "oracle_v3":
-        return ORACLE_V3_STATE_PATH, ORACLE_V3_TRADES_LOG_PATH
-    if strategy == "early":
-        return EARLY_STATE_PATH, EARLY_TRADES_LOG_PATH
-    if strategy == "arb":
-        return pair_cost.DEFAULT_STATE_PATH, pair_cost.DEFAULT_TRADES_LOG_PATH
-    if strategy == "copy":
-        return copy_bot.DEFAULT_STATE_PATH, copy_bot.DEFAULT_TRADES_LOG_PATH
-    return state_path, trades_log_path
+    bot = {"arb": pair_cost, "arb2": pair_cost_v2, "copy": copy_bot}[strategy]
+    return bot.DEFAULT_STATE_PATH, bot.DEFAULT_TRADES_LOG_PATH
 
 
 @app.route("/")
@@ -227,15 +153,13 @@ def index():
 
 @app.route("/api/data")
 def api_data():
-    """Returns all three paper strategies' states in one payload — see
-    module docstring: these render as parallel, always-visible panels now,
-    not a toggle, so there's no `?strategy=` selector to pick just one."""
+    """Every bot's state in one payload — the panels are all always visible."""
     live_price.maybe_refresh()
 
     bots = {}
     for strategy in PAPER_STRATEGIES:
         sp, _ = _state_paths_for(strategy)
-        bots[strategy] = dash.load_paper_state(sp)
+        bots[strategy] = _load_state(sp)
 
     return jsonify(
         {
@@ -254,15 +178,6 @@ def _bot_status(mode: str) -> dict:
     pid = pidfile.read_pid(info["pidfile"])
     running = pid is not None and pidfile.pid_is_alive(pid)
     return {"mode": mode, "running": running, "pid": pid if running else None}
-
-
-WATCHDOG_PID_PATH = PROJECT_ROOT / "watchdog.pid"
-
-
-def _watchdog_status() -> dict:
-    pid = pidfile.read_pid(WATCHDOG_PID_PATH)
-    running = pid is not None and pidfile.pid_is_alive(pid)
-    return {"running": running, "pid": pid if running else None}
 
 
 def _terminate(pid: int, proc: subprocess.Popen | None = None) -> bool:
@@ -292,128 +207,8 @@ def _float_param(payload: dict, key: str, default: float, lo: float | None = Non
     return v
 
 
-def _int_param(payload: dict, key: str, default: int, lo: int | None = None, hi: int | None = None) -> int:
-    try:
-        v = int(payload.get(key, default))
-    except (TypeError, ValueError):
-        v = default
-    if lo is not None:
-        v = max(v, lo)
-    if hi is not None:
-        v = min(v, hi)
-    return v
-
-
-def _paper_args(payload: dict) -> list:
-    args = [
-        "--bankroll", str(_float_param(payload, "bankroll", 50.0, lo=1.0)),
-        "--min-edge", str(_float_param(payload, "min_edge", 0.02, lo=0.0, hi=0.5)),
-        "--max-position-pct", str(_float_param(payload, "max_position_pct", 0.05, lo=0.001, hi=1.0)),
-        "--kelly-multiplier", str(_float_param(payload, "kelly_multiplier", 0.25, lo=0.01, hi=1.0)),
-    ]  # fmt: skip
-    max_open_positions = payload.get("max_open_positions")
-    if max_open_positions not in (None, "", "null"):
-        args += ["--max-open-positions", str(_int_param(payload, "max_open_positions", 1, lo=1, hi=100))]
-    return args
-
-
-def _oracle_v2_args(payload: dict) -> list:
-    """paper_trader.py's --v2 flag plus v1's core args (same script,
-    same core flags) — the four v2-only filter knobs are additive on top.
-    Also passes --state-file/--trades-log/--pid-file/--autorestart-marker/
-    --perf-log-dir explicitly (see ORACLE_V2_* constants and the comment
-    above BOT_SCRIPTS) — paper_trader.py's own defaults for all five are
-    identical regardless of --v2, so without this "oracle_v2" would
-    silently collide with "paper" on every one of them."""
-    return _paper_args(payload) + [
-        "--v2",
-        "--min-prob",
-        str(_float_param(payload, "min_prob", oracle_lag_strategy.DEFAULT_MIN_PROB, lo=0.0, hi=1.0)),
-        "--safety-factor",
-        str(_float_param(payload, "safety_factor", oracle_lag_strategy.DEFAULT_SAFETY_FACTOR, lo=0.0, hi=1.0)),
-        "--entry-window-start",
-        str(
-            _float_param(
-                payload, "entry_window_start", oracle_lag_strategy.DEFAULT_ENTRY_WINDOW_START, lo=0.0, hi=3600.0
-            )
-        ),
-        "--entry-window-end",
-        str(_float_param(payload, "entry_window_end", oracle_lag_strategy.DEFAULT_ENTRY_WINDOW_END, lo=0.0, hi=3600.0)),
-        "--state-file",
-        str(ORACLE_V2_STATE_PATH),
-        "--trades-log",
-        str(ORACLE_V2_TRADES_LOG_PATH),
-        "--pid-file",
-        str(ORACLE_V2_PID_PATH),
-        "--autorestart-marker",
-        str(ORACLE_V2_AUTORESTART_MARKER),
-        "--perf-log-dir",
-        str(ORACLE_V2_PERF_LOG_DIR),
-    ]
-
-
-def _oracle_v3_args(payload: dict) -> list:
-    """Same shape as _oracle_v2_args (paper_trader.py's --v3 flag instead of
-    --v2 — same three filter knobs, v3 adds no new ones of its own, since
-    compounding is automatic once wired) but with its own distinct
-    --state-file/--trades-log/--pid-file/--autorestart-marker/--perf-log-dir
-    (ORACLE_V3_* constants) so it doesn't collide with "paper" or
-    "oracle_v2"."""
-    return _paper_args(payload) + [
-        "--v3",
-        "--min-prob",
-        str(_float_param(payload, "min_prob", oracle_lag_strategy.DEFAULT_MIN_PROB, lo=0.0, hi=1.0)),
-        "--safety-factor",
-        str(_float_param(payload, "safety_factor", oracle_lag_strategy.DEFAULT_SAFETY_FACTOR, lo=0.0, hi=1.0)),
-        "--entry-window-start",
-        str(
-            _float_param(
-                payload, "entry_window_start", oracle_lag_strategy.DEFAULT_ENTRY_WINDOW_START, lo=0.0, hi=3600.0
-            )
-        ),
-        "--entry-window-end",
-        str(_float_param(payload, "entry_window_end", oracle_lag_strategy.DEFAULT_ENTRY_WINDOW_END, lo=0.0, hi=3600.0)),
-        "--state-file",
-        str(ORACLE_V3_STATE_PATH),
-        "--trades-log",
-        str(ORACLE_V3_TRADES_LOG_PATH),
-        "--pid-file",
-        str(ORACLE_V3_PID_PATH),
-        "--autorestart-marker",
-        str(ORACLE_V3_AUTORESTART_MARKER),
-        "--perf-log-dir",
-        str(ORACLE_V3_PERF_LOG_DIR),
-    ]
-
-
-def _early_args(payload: dict) -> list:
-    """paper_trader.py --early: fixed stake, no Kelly — so no bankroll-%/kelly
-    knobs, just the early-move filters. Distinct files for the same reason as
-    _oracle_v2_args."""
-    args = [
-        "--early",
-        "--bankroll", str(_float_param(payload, "bankroll", 50.0, lo=1.0)),
-        "--stake-usd", str(_float_param(payload, "stake_usd", early_move_strategy.DEFAULT_STAKE_USD, lo=0.1)),
-        "--min-z", str(_float_param(payload, "min_z", early_move_strategy.DEFAULT_MIN_Z, lo=0.0, hi=10.0)),
-        "--max-price", str(_float_param(payload, "max_price", early_move_strategy.DEFAULT_MAX_PRICE, lo=0.01, hi=0.99)),
-        "--min-edge", str(_float_param(payload, "min_edge", early_move_strategy.DEFAULT_MIN_EDGE, lo=0.0, hi=0.5)),
-        "--early-min-elapsed", str(_float_param(payload, "early_min_elapsed", early_move_strategy.DEFAULT_MIN_ELAPSED, lo=0.0, hi=300.0)),
-        "--early-max-elapsed", str(_float_param(payload, "early_max_elapsed", early_move_strategy.DEFAULT_MAX_ELAPSED, lo=0.0, hi=300.0)),
-        "--state-file", str(EARLY_STATE_PATH),
-        "--trades-log", str(EARLY_TRADES_LOG_PATH),
-        "--pid-file", str(EARLY_PID_PATH),
-        "--autorestart-marker", str(EARLY_AUTORESTART_MARKER),
-        "--perf-log-dir", str(EARLY_PERF_LOG_DIR),
-    ]  # fmt: skip
-    max_open_positions = payload.get("max_open_positions")
-    if max_open_positions not in (None, "", "null"):
-        args += ["--max-open-positions", str(_int_param(payload, "max_open_positions", 1, lo=1, hi=100))]
-    return args
-
-
 def _arb_args(payload: dict) -> list:
-    """pair_cost_paper_trader.py: no Kelly, no probability model — just the
-    leg-in/hedge knobs. Its own state/trades/pid defaults are already unique."""
+    """pair_cost_paper_trader.py: the leg-in/hedge knobs. Its own state/trades/pid defaults are already unique."""
     return [
         "--bankroll", str(_float_param(payload, "bankroll", 50.0, lo=1.0)),
         "--clip-usd", str(_float_param(payload, "clip_usd", pair_cost.DEFAULT_CLIP_USD, lo=0.5)),
@@ -421,7 +216,13 @@ def _arb_args(payload: dict) -> list:
         "--min-margin", str(_float_param(payload, "min_margin", pair_cost.DEFAULT_MIN_MARGIN, lo=0.0, hi=0.5)),
         "--max-window-usd", str(_float_param(payload, "max_window_usd", pair_cost.DEFAULT_MAX_WINDOW_USD, lo=0.5)),
         "--min-seconds-remaining", str(_float_param(payload, "min_seconds_remaining", pair_cost.DEFAULT_MIN_SECONDS_REMAINING, lo=0.0, hi=300.0)),
+        "--latency-ms", str(_float_param(payload, "latency_ms", pair_cost.DEFAULT_LATENCY_MS, lo=0.0, hi=5000.0)),
     ]  # fmt: skip
+
+
+def _arb2_args(payload: dict) -> list:
+    """pair_cost_v2_paper_trader.py: v1's knobs plus --pair-only (risk-free pairs only)."""
+    return _arb_args(payload) + (["--pair-only"] if payload.get("pair_only") is True else [])
 
 
 def _copy_args(payload: dict) -> list:
@@ -442,18 +243,15 @@ def _copy_args(payload: dict) -> list:
 # this instead of an if/else chain, so adding a strategy means adding one
 # entry here rather than another branch.
 ARGS_BUILDERS = {
-    "paper": _paper_args,
-    "oracle_v2": _oracle_v2_args,
-    "oracle_v3": _oracle_v3_args,
-    "early": _early_args,
     "arb": _arb_args,
+    "arb2": _arb2_args,
     "copy": _copy_args,
 }
 
 
 @app.route("/api/bot/status")
 def api_bot_status():
-    return jsonify({mode: _bot_status(mode) for mode in BOT_SCRIPTS} | {"watchdog": _watchdog_status()})
+    return jsonify({mode: _bot_status(mode) for mode in BOT_SCRIPTS})
 
 
 @app.route("/api/bot/start", methods=["POST"])
@@ -500,40 +298,10 @@ def api_bot_stop():
     return jsonify({"ok": not still_alive, "mode": mode, "pid": pid, "still_alive": still_alive})
 
 
-@app.route("/api/watchdog/start", methods=["POST"])
-def api_watchdog_start():
-    if _watchdog_status()["running"]:
-        return jsonify({"error": "watchdog already running"}), 409
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(LOGS_DIR / "watchdog.log", "a") as log_f:
-        proc = subprocess.Popen(
-            [sys.executable, "-u", str(PROJECT_ROOT / "watchdog.py")],
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            cwd=str(PROJECT_ROOT),
-        )
-    bot_processes["watchdog"] = proc
-    time.sleep(0.5)
-    if proc.poll() is not None:
-        return jsonify({"error": f"watchdog exited immediately (code {proc.returncode})"}), 500
-    return jsonify({"ok": True, "pid": proc.pid})
-
-
-@app.route("/api/watchdog/stop", methods=["POST"])
-def api_watchdog_stop():
-    st = _watchdog_status()
-    if not st["running"]:
-        return jsonify({"error": "watchdog is not running"}), 409
-    return jsonify({"ok": _terminate(st["pid"], bot_processes.get("watchdog"))})
-
-
 @app.route("/api/killswitch", methods=["POST"])
 def api_killswitch():
-    """Stop the watchdog first (else it could resurrect a bot), then every bot, then archive each bot's data."""
-    result = {"watchdog": None, "bots": {}}
-    wd = _watchdog_status()
-    if wd["running"]:
-        result["watchdog"] = _terminate(wd["pid"], bot_processes.get("watchdog"))
+    """Stop every bot, then archive each bot's data."""
+    result = {"bots": {}}
     for mode in PAPER_STRATEGIES:
         st = _bot_status(mode)
         if st["running"] and not _terminate(st["pid"], bot_processes.get(mode)):
@@ -604,22 +372,16 @@ def _iso(ts) -> str:
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def build_report_csv(strategy: str = "paper") -> str:
+def build_report_csv(strategy: str) -> str:
     sp, tl = _state_paths_for(strategy)
     history = load_trade_history(tl)
-    state = dash.load_paper_state(sp) or {}
+    state = _load_state(sp) or {}
     stats = state.get("stats", {})
 
     buf = io.StringIO()
     w = csv.writer(buf)
 
-    title = {
-        "oracle_v2": "Oracle-lag scalper v2",
-        "oracle_v3": "Oracle-lag scalper v3",
-        "early": "Early-move",
-        "arb": "Arbitrage (Pair Cost)",
-        "copy": "Copy trading",
-    }.get(strategy, "Oracle-lag scalper")
+    title = {"arb": "Arbitrage (Pair Cost)", "arb2": "Arbitrage (Pair Cost) v2", "copy": "Copy trading"}[strategy]
     w.writerow([f"{title} — paper trading report"])
     w.writerow(["Generated", _iso(time.time())])
     w.writerow([])
@@ -669,9 +431,9 @@ def build_report_csv(strategy: str = "paper") -> str:
 
 @app.route("/api/report.csv")
 def api_report_csv():
-    strategy = request.args.get("strategy", "paper")
+    strategy = request.args.get("strategy")
     if strategy not in PAPER_STRATEGIES:
-        strategy = "paper"
+        return Response("Unknown strategy.", mimetype="text/plain", status=404)
     sp, _ = _state_paths_for(strategy)
     if not sp.exists():
         return Response("No paper trading data yet.", mimetype="text/plain", status=404)
@@ -689,21 +451,13 @@ def api_report_csv():
 
 
 def main():
-    global state_path, trades_log_path
-
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1, localhost only)")
     parser.add_argument("--port", type=int, default=5000)
-    parser.add_argument("--state-file", default=str(dash.DEFAULT_STATE_PATH))
-    parser.add_argument("--trades-log", default=str(trades_log_path))
     parser.add_argument("--debug", action="store_true", help="Flask debug mode (auto-reload, verbose errors)")
     args = parser.parse_args()
 
-    state_path = Path(args.state_file)
-    trades_log_path = Path(args.trades_log)
-
     print(f"Dashboard running at http://{args.host}:{args.port}", file=sys.stderr)
-    print(f"Reading state from {state_path}", file=sys.stderr)
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 

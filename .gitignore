@@ -9,24 +9,17 @@ log_collector/*
 !log_collector/README.md
 *.log
 
-# bot runtime files (state, pidfile, watchdog autorestart marker) — generated locally, not source
+# bot runtime files (state, pidfile, autorestart marker) — generated locally, not source
 paper_trading/*state*.json
 paper_trading/*state*.tmp
 paper_trading/*.pid
 paper_trading/*.autorestart.json
-watchdog.pid
 
 # runs archived before log_collector/ existed
 paper_trading/archive/
 
-# gabagool_paper_trader.py and experiments/trend_paper_trader.py still log beside themselves
+# gabagool_paper_trader.py still logs beside itself
 paper_trading/gabagool_trades.jsonl
-experiments/trend_paper_state.json
-experiments/trend_paper_state.tmp
-experiments/trend_paper_trades.jsonl
-experiments/trend_paper_trader.pid
-experiments/trend_paper_trader.autorestart.json
-experiments/perf_logs/
 
 # python
 __pycache__/
